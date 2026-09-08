@@ -1,16 +1,15 @@
 import discord
 from typing import Dict, Optional
-from src.config import config
 
 
 class PnLLauncherView(discord.ui.View):
     """
     Persistent Discord panel view with:
     - Green 'Check PnL' button
-    - Blockchain dropdown selection below it
+    - Blockchain dropdown selection below it (silent selection, no popup messages)
     """
 
-    # Track selection per user so multiple users don't conflict
+    # Track selection per user
     user_selected_chains: Dict[int, str] = {}
 
     def __init__(self):
@@ -63,16 +62,9 @@ class PnLLauncherView(discord.ui.View):
     async def select_chain(
         self, interaction: discord.Interaction, select: discord.ui.Select
     ):
-        chosen = select.values[0]
-        self.user_selected_chains[interaction.user.id] = chosen
-
-        chain_cfg = config.get_chain_config(chosen)
-        display = chain_cfg.display_name if chain_cfg else chosen.capitalize()
-
-        await interaction.response.send_message(
-            f"Selected **{display}**! Click **Check PnL** above to continue.",
-            ephemeral=True,
-        )
+        # Save user selection silently without sending any confirmation popup
+        self.user_selected_chains[interaction.user.id] = select.values[0]
+        await interaction.response.defer()
 
 
 class PnLResultView(discord.ui.View):

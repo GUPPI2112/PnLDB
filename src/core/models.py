@@ -53,13 +53,16 @@ class PnLResult:
     held_value_native: float
     
     # Financials
-    total_invested: float      # minted_native + bought_native
-    total_received: float      # sold_native
-    net_pnl_native: float      # sold_native + held_value_native - total_invested
+    total_invested: float
+    total_received: float
+    net_pnl_native: float
     net_pnl_usd: float
     roi_percentage: float
     is_profit: bool
     
+    # User Profile Info
+    user_display_name: Optional[str] = None
+    user_avatar_url: Optional[str] = None
     ens_name: Optional[str] = None
     collection_name: Optional[str] = None
     collection_image_url: Optional[str] = None
@@ -75,7 +78,7 @@ class PnLResult:
 
     @property
     def display_user(self) -> str:
-        return self.ens_name or self.shortened_wallet
+        return self.user_display_name or self.ens_name or self.shortened_wallet
 
     @property
     def formatted_usd_pnl(self) -> str:

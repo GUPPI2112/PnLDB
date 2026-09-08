@@ -10,17 +10,14 @@ def calculate_nft_pnl(
     currency_symbol: str = "ETH",
     floor_price_native: Optional[float] = None,
     native_price_usd: Optional[float] = None,
+    user_display_name: Optional[str] = None,
+    user_avatar_url: Optional[str] = None,
     ens_name: Optional[str] = None,
     collection_name: Optional[str] = None,
     collection_image_url: Optional[str] = None,
 ) -> PnLResult:
     """
-    Calculates NFT portfolio PnL, ROI %, and inventory matching the template metrics:
-    - Minted (Count & Total Native Spent)
-    - Bought (Count & Total Native Spent)
-    - Sold (Count & Total Native Received)
-    - Holding (Count & Estimated Native Floor Value)
-    - PNL (Net USD & Native PnL, ROI %)
+    Calculates NFT portfolio PnL, ROI %, and inventory matching the template metrics.
     """
     norm_wallet = wallet_address.lower().strip()
     norm_contract = contract_address.lower().strip()
@@ -98,6 +95,8 @@ def calculate_nft_pnl(
         net_pnl_usd=net_pnl_usd,
         roi_percentage=roi_percentage,
         is_profit=is_profit,
+        user_display_name=user_display_name,
+        user_avatar_url=user_avatar_url,
         ens_name=ens_name,
         collection_name=collection_name,
         collection_image_url=collection_image_url,

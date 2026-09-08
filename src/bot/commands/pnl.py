@@ -1,11 +1,10 @@
 import logging
-import re
 import discord
 from discord import app_commands
 from src.config import config
 from src.core.calculator import calculate_nft_pnl
 from src.renderer.card_renderer import render_pnl_card
-from src.services.reservoir import ReservoirProvider
+from src.services.chain_provider import MultiChainProvider
 from src.bot.views import PnLResultView
 
 logger = logging.getLogger(__name__)
@@ -13,10 +12,7 @@ logger = logging.getLogger(__name__)
 
 def is_valid_address(address: str) -> bool:
     addr = address.strip()
-    # EVM address (0x...) or Solana (base58) or Bitcoin (bc1 / 1 / 3)
-    if len(addr) < 4:
-        return False
-    return True
+    return len(addr) >= 4
 
 
 async def execute_pnl_check(
@@ -56,19 +52,15 @@ async def execute_pnl_check(
         )
         return
 
-    # 2. Fetch data from Reservoir
-    provider = ReservoirProvider()
+    # User profile data from Discord
+    user_name = interaction.user.display_name or interaction.user.name
+    avatar_url = interaction.user.display_avatar.url if interaction.user.display_avatar else None
+
+    # 2. Fetch data via robust MultiChainProvider
+    provider = MultiChainProvider()
     try:
         collection_meta = await provider.get_collection_metadata(contract, chain_cfg.name)
         activities = await provider.get_user_activity(wallet, contract, chain_cfg.name)
-
-        if not activities:
-            short_w = f"{wallet[:6]}...{wallet[-4:]}" if len(wallet) >= 10 else wallet
-            await interaction.followup.send(
-                f"No transaction or trading activity found for wallet `{short_w}` in collection **{collection_meta.name}** on **{chain_cfg.display_name}**.",
-                ephemeral=False,
-            )
-            return
 
         # 3. Calculate PnL matching reference template
         pnl_result = calculate_nft_pnl(
@@ -79,12 +71,14 @@ async def execute_pnl_check(
             currency_symbol=chain_cfg.currency_symbol,
             floor_price_native=collection_meta.floor_price_native,
             native_price_usd=collection_meta.native_price_usd,
+            user_display_name=user_name,
+            user_avatar_url=avatar_url,
             ens_name=None,
             collection_name=collection_meta.name,
             collection_image_url=collection_meta.image_url,
         )
 
-        # 4. Render PnL Card
+        # 4. Render PnL Card with Discord User Avatar & Name
         image_buffer = await render_pnl_card(pnl_result, collection_meta)
 
         # 5. Send Discord response with image and Download Card button

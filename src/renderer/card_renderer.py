@@ -58,7 +58,7 @@ def make_squircle_avatar(
     raw_img: Optional[Image.Image] = None,
     size: int = 48,
     radius: int = 12,
-    fallback_letter: str = "W",
+    fallback_letter: str = "U",
 ) -> Image.Image:
     """Creates a rounded-corner squircle avatar matching pnlref format."""
     mask = Image.new("L", (size, size), 0)
@@ -108,10 +108,10 @@ async def render_pnl_card(
 ) -> io.BytesIO:
     """
     Renders the exact PnL Card format based on pnltemp and pnlref.
+    Features the user's Discord name and Discord profile picture.
     """
     width, height = 1024, 576
 
-    # Choose template: priority pnltemp.png -> profit_card/loss_card -> fallback
     template_candidates = [
         TEMPLATES_DIR / "pnltemp.png",
         config.PROFIT_TEMPLATE_PATH if pnl.is_profit else config.LOSS_TEMPLATE_PATH,
@@ -130,24 +130,25 @@ async def render_pnl_card(
                 logger.warning("Error loading template %s: %s", cand, e)
 
     if base_card is None:
-        # Fallback dark canvas
         base_card = Image.new("RGBA", (width, height), (10, 12, 16, 255))
 
     draw = ImageDraw.Draw(base_card)
 
     # Theme colors
-    # Profit: #2FE695 (47, 230, 149), Loss: #FF453A (255, 69, 58)
     accent_color = (47, 230, 149) if pnl.is_profit else (255, 69, 58)
     white = (255, 255, 255)
     gray_label = (142, 149, 162)
     sep_color = (35, 42, 52)
 
     # --- 1. USER PROFILE (TOP LEFT) ---
+    # Prioritize user's Discord avatar, then collection image
     avatar_raw = None
-    if collection.image_url:
+    if pnl.user_avatar_url:
+        avatar_raw = await download_image(pnl.user_avatar_url)
+    elif collection.image_url:
         avatar_raw = await download_image(collection.image_url)
 
-    first_letter = (collection.name[:1] if collection.name else "W").upper()
+    first_letter = (pnl.display_user[:1] if pnl.display_user else "U").upper()
     avatar = make_squircle_avatar(avatar_raw, size=48, radius=12, fallback_letter=first_letter)
     base_card.paste(avatar, (42, 42), mask=avatar)
 
@@ -158,8 +159,7 @@ async def render_pnl_card(
     font_col_label = get_font(15, bold=False)
     draw.text((42, 138), "Collection", fill=gray_label, font=font_col_label)
 
-    # Collection Name with auto font size
-    col_name = collection.name or "Unknown Collection"
+    col_name = collection.name or "NFT Collection"
     font_size = 44 if len(col_name) <= 16 else (36 if len(col_name) <= 24 else 28)
     font_col_name = get_font(font_size, bold=True)
     draw.text((42, 168), col_name, fill=white, font=font_col_name)
@@ -183,7 +183,6 @@ async def render_pnl_card(
         draw.text((st["x"], 270), st["lbl"], fill=gray_label, font=font_stat_lbl)
         draw.text((st["x"], 298), st["val"], fill=white, font=font_stat_val)
 
-        # Place diamond glyph next to value
         bbox = font_stat_val.getbbox(st["val"])
         val_w = bbox[2] - bbox[0]
         draw_eth_diamond(draw, st["x"] + val_w + 10, 313, size=14, color=white)
@@ -207,7 +206,6 @@ async def render_pnl_card(
     sub_bbox = font_pnl_sub.getbbox(sub_prefix)
     sub_w = sub_bbox[2] - sub_bbox[0]
     
-    # Diamond in subline
     draw_eth_diamond(draw, 42 + sub_w + 5, 485, size=13, color=accent_color)
     draw.text((42 + sub_w + 14, 474), ")", fill=accent_color, font=font_pnl_sub)
 
@@ -215,7 +213,6 @@ async def render_pnl_card(
     font_footer = get_font(14, bold=False)
     draw.text((820, 525), "discord.gg/egodao", fill=(85, 92, 102), font=font_footer)
 
-    # Output PNG buffer
     buffer = io.BytesIO()
     base_card.convert("RGB").save(buffer, format="PNG", quality=95)
     buffer.seek(0)
