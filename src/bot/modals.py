@@ -34,8 +34,8 @@ class PnLModal(ui.Modal):
         self.add_item(self.contract_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Defer interaction immediately to prevent 3-second timeout
-        await interaction.response.defer(thinking=True)
+        # Defer ephemerally so the result is private and has 'Dismiss message'
+        await interaction.response.defer(thinking=True, ephemeral=True)
 
         from src.bot.commands.pnl import execute_pnl_check
 

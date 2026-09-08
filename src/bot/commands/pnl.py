@@ -23,6 +23,7 @@ async def execute_pnl_check(
 ):
     """
     Main processing handler for both Modal submission and Slash Command.
+    Sends an ephemeral response so only the user sees it and can dismiss it.
     """
     wallet = wallet_str.strip()
     contract = contract_str.strip()
@@ -56,7 +57,7 @@ async def execute_pnl_check(
     user_name = interaction.user.display_name or interaction.user.name
     avatar_url = interaction.user.display_avatar.url if interaction.user.display_avatar else None
 
-    # 2. Fetch data via robust MultiChainProvider
+    # 2. Fetch data via MultiChainProvider
     provider = MultiChainProvider()
     try:
         collection_meta = await provider.get_collection_metadata(contract, chain_cfg.name)
@@ -81,11 +82,12 @@ async def execute_pnl_check(
         # 4. Render PnL Card with Discord User Avatar & Name
         image_buffer = await render_pnl_card(pnl_result, collection_meta)
 
-        # 5. Send Discord response with image and Download Card button
+        # 5. Send ephemeral Discord response with image and Download Card button
         file = discord.File(fp=image_buffer, filename="nft_pnl.png")
         
         sent_msg = await interaction.followup.send(
             file=file,
+            ephemeral=True,
             wait=True,
         )
 
@@ -132,7 +134,7 @@ async def pnl_command(
     contract: str,
     chain: app_commands.Choice[str],
 ):
-    await interaction.response.defer(thinking=True)
+    await interaction.response.defer(thinking=True, ephemeral=True)
     await execute_pnl_check(
         interaction=interaction,
         wallet_str=wallet,
