@@ -1,11 +1,17 @@
 import discord
-from typing import Optional
+from typing import Dict, Optional
+from src.config import config
 
 
 class PnLLauncherView(discord.ui.View):
     """
-    Simple persistent view with only the green 'Check PnL' button.
+    Persistent Discord panel view with:
+    - Green 'Check PnL' button
+    - Blockchain dropdown selection below it
     """
+
+    # Track selection per user so multiple users don't conflict
+    user_selected_chains: Dict[int, str] = {}
 
     def __init__(self):
         super().__init__(timeout=None)
@@ -14,14 +20,59 @@ class PnLLauncherView(discord.ui.View):
         label="Check PnL",
         style=discord.ButtonStyle.success,
         custom_id="nft_pnl_check_launcher_btn",
+        row=0,
     )
     async def check_pnl_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
+        user_id = interaction.user.id
+        selected_chain = self.user_selected_chains.get(user_id)
+
+        if not selected_chain:
+            await interaction.response.send_message(
+                "Please select a blockchain network from the dropdown below first!",
+                ephemeral=True,
+            )
+            return
+
         from src.bot.modals import PnLModal
 
-        modal = PnLModal()
+        modal = PnLModal(selected_chain=selected_chain)
         await interaction.response.send_modal(modal)
+
+    @discord.ui.select(
+        placeholder="Select Blockchain Network...",
+        custom_id="nft_pnl_chain_select_menu",
+        min_values=1,
+        max_values=1,
+        options=[
+            discord.SelectOption(label="Ethereum", value="ethereum", description="Ethereum Mainnet (ETH)"),
+            discord.SelectOption(label="Base", value="base", description="Base L2 (ETH)"),
+            discord.SelectOption(label="Solana", value="solana", description="Solana Network (SOL)"),
+            discord.SelectOption(label="Bitcoin", value="bitcoin", description="Bitcoin Ordinals (BTC)"),
+            discord.SelectOption(label="Robinhood", value="robinhood", description="Robinhood / Arbitrum (ETH)"),
+            discord.SelectOption(label="Polygon", value="polygon", description="Polygon Network (POL)"),
+            discord.SelectOption(label="Arbitrum", value="arbitrum", description="Arbitrum One (ETH)"),
+            discord.SelectOption(label="Optimism", value="optimism", description="Optimism L2 (ETH)"),
+            discord.SelectOption(label="Blast", value="blast", description="Blast L2 (ETH)"),
+            discord.SelectOption(label="Zora", value="zora", description="Zora Network (ETH)"),
+            discord.SelectOption(label="ApeChain", value="apechain", description="ApeChain (APE)"),
+        ],
+        row=1,
+    )
+    async def select_chain(
+        self, interaction: discord.Interaction, select: discord.ui.Select
+    ):
+        chosen = select.values[0]
+        self.user_selected_chains[interaction.user.id] = chosen
+
+        chain_cfg = config.get_chain_config(chosen)
+        display = chain_cfg.display_name if chain_cfg else chosen.capitalize()
+
+        await interaction.response.send_message(
+            f"Selected **{display}**! Click **Check PnL** above to continue.",
+            ephemeral=True,
+        )
 
 
 class PnLResultView(discord.ui.View):
