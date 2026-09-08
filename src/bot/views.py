@@ -1,16 +1,13 @@
 import discord
-from typing import Dict, Optional
+from typing import Optional
 
 
 class PnLLauncherView(discord.ui.View):
     """
-    Persistent Discord panel view with:
-    - Green 'Check PnL' button
-    - Blockchain dropdown selection below it (silent selection, no popup messages)
+    Persistent Discord panel view.
+    Selecting any blockchain from the dropdown opens the modal IMMEDIATELY.
+    Clicking 'Check PnL' also opens the modal directly.
     """
-
-    # Track selection per user
-    user_selected_chains: Dict[int, str] = {}
 
     def __init__(self):
         super().__init__(timeout=None)
@@ -24,19 +21,10 @@ class PnLLauncherView(discord.ui.View):
     async def check_pnl_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ):
-        user_id = interaction.user.id
-        selected_chain = self.user_selected_chains.get(user_id)
-
-        if not selected_chain:
-            await interaction.response.send_message(
-                "Please select a blockchain network from the dropdown below first!",
-                ephemeral=True,
-            )
-            return
-
         from src.bot.modals import PnLModal
 
-        modal = PnLModal(selected_chain=selected_chain)
+        # Defaults to Ethereum on direct button click
+        modal = PnLModal(selected_chain="ethereum")
         await interaction.response.send_modal(modal)
 
     @discord.ui.select(
@@ -62,9 +50,12 @@ class PnLLauncherView(discord.ui.View):
     async def select_chain(
         self, interaction: discord.Interaction, select: discord.ui.Select
     ):
-        # Save user selection silently without sending any confirmation popup
-        self.user_selected_chains[interaction.user.id] = select.values[0]
-        await interaction.response.defer()
+        from src.bot.modals import PnLModal
+
+        chosen = select.values[0]
+        # Open modal immediately for the chosen chain in 1 click!
+        modal = PnLModal(selected_chain=chosen)
+        await interaction.response.send_modal(modal)
 
 
 class PnLResultView(discord.ui.View):
