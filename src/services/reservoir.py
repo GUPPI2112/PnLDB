@@ -57,42 +57,39 @@ class ReservoirProvider(NFTDataProvider):
                     collections = data.get("collections", [])
                     if collections:
                         col = collections[0]
-                        name = col.get("name") or f"NFT ({contract_address[:6]}...)"
+                        name = col.get("name") or f"Collection ({contract_address[:6]}...)"
                         symbol = col.get("symbol") or ""
                         image = col.get("image")
                         if not image and col.get("sampleImages"):
                             image = col.get("sampleImages")[0]
-                        floor = (
-                            col.get("floorAsk", {})
-                            .get("price", {})
-                            .get("amount", {})
-                            .get("native")
-                        )
+                        
+                        floor_obj = col.get("floorAsk", {}).get("price", {}).get("amount", {})
+                        floor_native = floor_obj.get("native") or floor_obj.get("decimal")
+                        floor_usd = floor_obj.get("usd")
+
+                        native_usd_rate = None
+                        if floor_native and floor_usd and float(floor_native) > 0:
+                            native_usd_rate = float(floor_usd) / float(floor_native)
+
                         return CollectionMeta(
                             contract_address=contract_address.lower(),
                             name=name,
                             symbol=symbol,
                             image_url=image,
-                            floor_price_native=float(floor) if floor is not None else None,
+                            floor_price_native=float(floor_native) if floor_native is not None else 0.0,
+                            native_price_usd=native_usd_rate,
                             chain=chain_cfg.display_name,
                         )
-                elif resp.status == 429:
-                    logger.warning("Reservoir API rate limit encountered on get_collection_metadata")
-                else:
-                    logger.warning(
-                        "Reservoir metadata returned status %s: %s",
-                        resp.status,
-                        await resp.text(),
-                    )
         except Exception as e:
             logger.error("Error fetching collection metadata for %s on %s: %s", contract_address, chain, e)
 
-        # Fallback collection metadata if API fails or collection not in index
         return CollectionMeta(
             contract_address=contract_address.lower(),
             name=f"Collection ({contract_address[:6]}...{contract_address[-4:]})",
             symbol="NFT",
             image_url=None,
+            floor_price_native=0.0,
+            native_price_usd=2500.0,
             chain=chain_cfg.display_name,
         )
 
@@ -129,14 +126,6 @@ class ReservoirProvider(NFTDataProvider):
                         event = self._parse_activity_item(act, norm_wallet)
                         if event:
                             events.append(event)
-                elif resp.status == 429:
-                    logger.warning("Reservoir API rate limit encountered on get_user_activity")
-                else:
-                    logger.warning(
-                        "Reservoir activity returned status %s: %s",
-                        resp.status,
-                        await resp.text(),
-                    )
         except Exception as e:
             logger.error("Error fetching user activity for %s: %s", norm_wallet, e)
             raise
@@ -176,7 +165,6 @@ class ReservoirProvider(NFTDataProvider):
             elif from_addr == user_wallet:
                 activity_type = ActivityType.SELL
             else:
-                # If neither explicitly matches, check fill direction
                 activity_type = ActivityType.BUY if to_addr == user_wallet else ActivityType.SELL
         elif raw_type == "transfer":
             if from_addr == "0x0000000000000000000000000000000000000000" and to_addr == user_wallet:

@@ -10,7 +10,6 @@ from src.bot.views import PnLResultView
 
 logger = logging.getLogger(__name__)
 
-# EVM address validation regex
 ETH_ADDRESS_PATTERN = re.compile(r"^0x[a-fA-F0-9]{40}$")
 
 
@@ -58,7 +57,6 @@ async def execute_pnl_check(
     # 2. Fetch data from Reservoir
     provider = ReservoirProvider()
     try:
-        # Fetch metadata and activity
         collection_meta = await provider.get_collection_metadata(contract, chain_cfg.name)
         activities = await provider.get_user_activity(wallet, contract, chain_cfg.name)
 
@@ -70,13 +68,18 @@ async def execute_pnl_check(
             )
             return
 
-        # 3. Calculate PnL
+        # 3. Calculate PnL matching reference template
         pnl_result = calculate_nft_pnl(
             events=activities,
             wallet_address=wallet,
             contract_address=contract,
             chain=chain_cfg.name,
             currency_symbol=chain_cfg.currency_symbol,
+            floor_price_native=collection_meta.floor_price_native,
+            native_price_usd=collection_meta.native_price_usd,
+            ens_name=None,
+            collection_name=collection_meta.name,
+            collection_image_url=collection_meta.image_url,
         )
 
         # 4. Render PnL Card

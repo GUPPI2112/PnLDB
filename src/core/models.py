@@ -31,6 +31,7 @@ class CollectionMeta:
     symbol: str
     image_url: Optional[str] = None
     floor_price_native: Optional[float] = None
+    native_price_usd: Optional[float] = None
     chain: str = "base"
 
 
@@ -40,46 +41,48 @@ class PnLResult:
     contract_address: str
     chain: str
     currency_symbol: str
-    total_invested: float
-    total_received: float
-    net_pnl: float
-    realized_pnl: float
-    roi_percentage: float
+    
+    # Counts
+    minted_count: int
+    minted_native: float
     bought_count: int
+    bought_native: float
     sold_count: int
+    sold_native: float
     held_count: int
-    transfers_in_count: int
-    transfers_out_count: int
+    held_value_native: float
+    
+    # Financials
+    total_invested: float      # minted_native + bought_native
+    total_received: float      # sold_native
+    net_pnl_native: float      # sold_native + held_value_native - total_invested
+    net_pnl_usd: float
+    roi_percentage: float
     is_profit: bool
+    
+    ens_name: Optional[str] = None
+    collection_name: Optional[str] = None
+    collection_image_url: Optional[str] = None
 
     @property
     def shortened_wallet(self) -> str:
+        if self.ens_name:
+            return self.ens_name
         w = self.wallet_address
         if len(w) >= 10:
             return f"{w[:6]}...{w[-4:]}"
         return w
 
     @property
-    def shortened_contract(self) -> str:
-        c = self.contract_address
-        if len(c) >= 10:
-            return f"{c[:6]}...{c[-4:]}"
-        return c
+    def display_user(self) -> str:
+        return self.ens_name or self.shortened_wallet
 
     @property
-    def formatted_pnl(self) -> str:
-        sign = "+" if self.net_pnl >= 0 else ""
-        return f"{sign}{self.net_pnl:.4f} {self.currency_symbol}"
+    def formatted_usd_pnl(self) -> str:
+        sign = "+" if self.net_pnl_usd >= 0 else "-"
+        return f"{sign}${abs(self.net_pnl_usd):,.0f}"
 
     @property
-    def formatted_roi(self) -> str:
-        sign = "+" if self.roi_percentage >= 0 else ""
-        return f"{sign}{self.roi_percentage:.2f}%"
-
-    @property
-    def formatted_invested(self) -> str:
-        return f"{self.total_invested:.4f} {self.currency_symbol}"
-
-    @property
-    def formatted_received(self) -> str:
-        return f"{self.total_received:.4f} {self.currency_symbol}"
+    def formatted_native_pnl(self) -> str:
+        sign = "+" if self.net_pnl_native >= 0 else "-"
+        return f"{sign}{abs(self.net_pnl_native):.3f}"
