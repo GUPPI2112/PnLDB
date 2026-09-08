@@ -13,7 +13,7 @@ class PnLLauncherView(discord.ui.View):
 
     @discord.ui.button(
         label="Check PnL",
-        style=discord.ButtonStyle.primary,
+        style=discord.ButtonStyle.success,
         custom_id="nft_pnl_check_launcher_btn",
     )
     async def check_pnl_button(
