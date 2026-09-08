@@ -54,8 +54,14 @@ async def execute_pnl_check(
         return
 
     # User profile data from Discord
-    user_name = interaction.user.display_name or interaction.user.name
+    user_name = (
+        getattr(interaction.user, "global_name", None)
+        or getattr(interaction.user, "display_name", None)
+        or getattr(interaction.user, "name", None)
+        or "User"
+    )
     avatar_url = interaction.user.display_avatar.url if interaction.user.display_avatar else None
+    logger.info("Executing PnL check for %s (wallet: %s, contract: %s, chain: %s)", user_name, wallet, contract, chain_key)
 
     # 2. Fetch data via MultiChainProvider
     provider = MultiChainProvider()

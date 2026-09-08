@@ -14,10 +14,17 @@ FONTS_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "fonts"
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "templates"
 
 
-def clean_text(text: str) -> str:
-    """Strips emojis and unsupported unicode to ensure clean typography without missing glyph boxes."""
-    cleaned = re.sub(r"[^\x20-\x7E]+", "", text).strip()
-    return cleaned if cleaned else "User"
+def clean_text(text: Optional[str], fallback: str = "User") -> str:
+    """Strips emojis only, ensuring clean typography while preserving letters, numbers, and symbols."""
+    if not text:
+        return fallback
+    emoji_regex = re.compile(
+        "[\U00010000-\U0010ffff\U00002600-\U000027bf\U0001f300-\U0001f64f\U0001f680-\U0001f6ff\U00002702-\U000027b0\U000024c2-\U0001f251]",
+        flags=re.UNICODE,
+    )
+    cleaned = emoji_regex.sub("", text).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned if cleaned else (text.strip() or fallback)
 
 
 def get_space_grotesk(size: int, weight: str = "bold") -> ImageFont.FreeTypeFont:
@@ -103,7 +110,7 @@ async def download_image(url: str) -> Optional[Image.Image]:
 
 def make_squircle_avatar(
     raw_img: Optional[Image.Image] = None,
-    size: int = 50,
+    size: int = 52,
     radius: int = 14,
     fallback_letter: str = "U",
 ) -> Image.Image:
@@ -214,7 +221,7 @@ async def render_pnl_card(
 ) -> io.BytesIO:
     """
     Renders high-end Web3/Fintech NFT PnL card utilizing the entire canvas width.
-    Features top Discord user profile & chain badge, side-by-side Collection & Hero PnL,
+    Features top Discord user profile, side-by-side Collection & Hero PnL,
     full-width 4-column performance bar, and https://discord.gg/OBSIDIAN footer.
     """
     width, height = 1024, 576
@@ -248,8 +255,8 @@ async def render_pnl_card(
     gray_label = (140, 148, 162)
     sep_color = (40, 48, 62)
 
-    # --- 1. TOP HEADER (DISCORD USER ONLY & CHAIN BADGE) ---
-    clean_username = clean_text(pnl.display_user)
+    # --- 1. TOP HEADER (DISCORD USER AVATAR & NAME ONLY) ---
+    clean_username = clean_text(pnl.display_user, fallback="User")
 
     avatar_raw = None
     if pnl.user_avatar_url:
@@ -264,15 +271,6 @@ async def render_pnl_card(
     # Username in Space Grotesk Bold (No ETH address below it!)
     font_user = get_space_grotesk(24, weight="bold")
     draw.text((118, 56), clean_username, fill=white, font=font_user)
-
-    # Right: Network badge
-    chain_name = (pnl.chain or "Ethereum").upper()
-    font_badge = get_jetbrains_mono(12, weight="bold")
-    badge_bbox = font_badge.getbbox(chain_name)
-    badge_w = (badge_bbox[2] - badge_bbox[0]) if badge_bbox else 60
-    bx, by = 972 - badge_w - 24, 52
-    draw.rounded_rectangle([bx, by, 972, by + 28], radius=6, fill=(22, 26, 35), outline=(50, 60, 75), width=1)
-    draw.text((bx + 12, by + 6), chain_name, fill=(180, 190, 205), font=font_badge)
 
     # --- 2. MAIN SPLIT SECTION (COLLECTION LEFT, HERO PNL RIGHT) ---
     # Left Side: COLLECTION
