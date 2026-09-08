@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import Optional, Tuple
 import aiohttp
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 from src.config import config
 from src.core.models import CollectionMeta, PnLResult
 
@@ -15,23 +15,75 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "temp
 
 
 def clean_text(text: str) -> str:
-    """Strips emojis and non-ascii characters to ensure clean typography without missing glyph boxes."""
+    """Strips emojis and unsupported unicode to ensure clean typography without missing glyph boxes."""
     cleaned = re.sub(r"[^\x20-\x7E]+", "", text).strip()
     return cleaned if cleaned else "User"
 
 
-def get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    """Loads bundled modern Inter font."""
-    font_file = "Font-Bold.ttf" if bold else "Font-Regular.ttf"
-    local_path = FONTS_DIR / font_file
-
-    if local_path.exists():
+def get_space_grotesk(size: int, weight: str = "bold") -> ImageFont.FreeTypeFont:
+    """
+    Loads Space Grotesk font with specific weight:
+    - 'extrabold' / 'bold' -> SpaceGrotesk-Bold.ttf
+    - 'semibold' -> SpaceGrotesk-SemiBold.ttf
+    - 'medium' -> SpaceGrotesk-Medium.ttf
+    - 'regular' -> SpaceGrotesk-Regular.ttf
+    """
+    weight_map = {
+        "extrabold": "SpaceGrotesk-Bold.ttf",
+        "bold": "SpaceGrotesk-Bold.ttf",
+        "semibold": "SpaceGrotesk-SemiBold.ttf",
+        "medium": "SpaceGrotesk-Medium.ttf",
+        "regular": "SpaceGrotesk-Regular.ttf",
+    }
+    fname = weight_map.get(weight.lower(), "SpaceGrotesk-Bold.ttf")
+    path = FONTS_DIR / fname
+    if path.exists():
         try:
-            return ImageFont.truetype(str(local_path), size)
+            return ImageFont.truetype(str(path), size)
         except Exception:
             pass
-
     return ImageFont.load_default()
+
+
+def get_jetbrains_mono(size: int, weight: str = "medium") -> ImageFont.FreeTypeFont:
+    """
+    Loads JetBrains Mono font for addresses, contracts, and hash data:
+    - 'bold' -> JetBrainsMono-Bold.ttf
+    - 'medium' -> JetBrainsMono-Medium.ttf
+    - 'regular' -> JetBrainsMono-Regular.ttf
+    """
+    weight_map = {
+        "bold": "JetBrainsMono-Bold.ttf",
+        "medium": "JetBrainsMono-Medium.ttf",
+        "regular": "JetBrainsMono-Regular.ttf",
+    }
+    fname = weight_map.get(weight.lower(), "JetBrainsMono-Medium.ttf")
+    path = FONTS_DIR / fname
+    if path.exists():
+        try:
+            return ImageFont.truetype(str(path), size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
+
+
+def draw_tracked_text(
+    draw: ImageDraw.Draw,
+    xy: Tuple[float, float],
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    fill: Tuple[int, int, int],
+    letter_spacing: float = 0.0,
+) -> float:
+    """Draws text with generous letter spacing (tracking) for uppercase labels."""
+    x, y = xy
+    curr_x = x
+    for char in text:
+        draw.text((curr_x, y), char, font=font, fill=fill)
+        bbox = font.getbbox(char)
+        char_w = (bbox[2] - bbox[0]) if bbox else 8
+        curr_x += char_w + letter_spacing
+    return curr_x - x
 
 
 async def download_image(url: str) -> Optional[Image.Image]:
@@ -51,11 +103,11 @@ async def download_image(url: str) -> Optional[Image.Image]:
 
 def make_squircle_avatar(
     raw_img: Optional[Image.Image] = None,
-    size: int = 48,
-    radius: int = 12,
+    size: int = 50,
+    radius: int = 14,
     fallback_letter: str = "U",
 ) -> Image.Image:
-    """Creates a rounded-corner squircle avatar matching pnlref format."""
+    """Creates a high-contrast rounded-corner squircle avatar."""
     mask = Image.new("L", (size, size), 0)
     draw_mask = ImageDraw.Draw(mask)
     draw_mask.rounded_rectangle([0, 0, size, size], radius=radius, fill=255)
@@ -67,14 +119,40 @@ def make_squircle_avatar(
         output.paste(resized, (0, 0), mask=mask)
     else:
         draw = ImageDraw.Draw(output)
-        draw.rounded_rectangle([0, 0, size - 1, size - 1], radius=radius, fill=(30, 36, 46))
-        font = get_font(int(size * 0.45), bold=True)
+        draw.rounded_rectangle([0, 0, size - 1, size - 1], radius=radius, fill=(24, 28, 36))
+        font = get_space_grotesk(int(size * 0.45), weight="bold")
         draw.text((size // 2 - 6, size // 2 - 12), fallback_letter, fill=(200, 210, 225), font=font)
 
-    # Outline border
+    # Subtle modern border
     draw_border = ImageDraw.Draw(output)
-    draw_border.rounded_rectangle([0, 0, size - 1, size - 1], radius=radius, outline=(60, 70, 85), width=1)
+    draw_border.rounded_rectangle([0, 0, size - 1, size - 1], radius=radius, outline=(65, 75, 90), width=1)
     return output
+
+
+def draw_arrow_triangle(
+    draw: ImageDraw.Draw,
+    cx: float,
+    cy: float,
+    size: float = 11,
+    is_up: bool = True,
+    color: Tuple[int, int, int] = (47, 230, 149),
+):
+    """Draws a crisp geometric upward (profit) or downward (loss) triangle."""
+    half_w = size * 0.55
+    half_h = size * 0.50
+    if is_up:
+        pts = [
+            (cx, cy - half_h),
+            (cx + half_w, cy + half_h),
+            (cx - half_w, cy + half_h),
+        ]
+    else:
+        pts = [
+            (cx, cy + half_h),
+            (cx + half_w, cy - half_h),
+            (cx - half_w, cy - half_h),
+        ]
+    draw.polygon(pts, fill=color)
 
 
 def draw_eth_diamond(
@@ -84,7 +162,7 @@ def draw_eth_diamond(
     size: float = 14,
     color: Tuple[int, int, int] = (255, 255, 255),
 ):
-    """Draws a crisp Ethereum diamond glyph matching the template reference."""
+    """Draws a crisp geometric Ethereum diamond glyph."""
     half_h = size * 0.60
     half_w = size * 0.38
     pts = [
@@ -96,13 +174,47 @@ def draw_eth_diamond(
     draw.polygon(pts, fill=color)
 
 
+def draw_hero_pnl_with_glow(
+    image: Image.Image,
+    xy: Tuple[int, int],
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    text_color: Tuple[int, int, int],
+    is_profit: bool,
+):
+    """
+    Renders prominent hero PnL with a subtle, luxury fintech neon glow.
+    """
+    x, y = xy
+    glow_rgb = (47, 230, 149) if is_profit else (255, 69, 58)
+
+    # Create an overlay for the subtle neon glow
+    glow_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    glow_draw = ImageDraw.Draw(glow_layer)
+
+    # Multi-pass soft glow
+    for offset in [1, 2, 3, 4]:
+        alpha = int(28 / offset)
+        glow_draw.text((x - offset, y), text, font=font, fill=(*glow_rgb, alpha))
+        glow_draw.text((x + offset, y), text, font=font, fill=(*glow_rgb, alpha))
+        glow_draw.text((x, y - offset), text, font=font, fill=(*glow_rgb, alpha))
+        glow_draw.text((x, y + offset), text, font=font, fill=(*glow_rgb, alpha))
+
+    glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(radius=2.5))
+    image.paste(glow_layer, (0, 0), mask=glow_layer)
+
+    # Crisp text on top
+    main_draw = ImageDraw.Draw(image)
+    main_draw.text((x, y), text, font=font, fill=text_color)
+
+
 async def render_pnl_card(
     pnl: PnLResult,
     collection: CollectionMeta,
 ) -> io.BytesIO:
     """
-    Renders the exact PnL Card format based on pnltemp and pnlref.
-    Features user's Discord name and Discord profile picture without broken emoji boxes.
+    Renders high-end Web3/Fintech NFT PnL card with Space Grotesk + JetBrains Mono.
+    Features geometric typography, generous tracking for labels, tight numbers, and subtle neon glow.
     """
     width, height = 1024, 576
 
@@ -128,13 +240,14 @@ async def render_pnl_card(
 
     draw = ImageDraw.Draw(base_card)
 
-    # Theme colors
+    # Premium Fintech Colors
     accent_color = (47, 230, 149) if pnl.is_profit else (255, 69, 58)
     white = (255, 255, 255)
-    gray_label = (142, 149, 162)
+    gray_label = (140, 148, 162)
+    gray_mono = (165, 175, 190)
     sep_color = (35, 42, 52)
 
-    # --- 1. USER PROFILE (TOP LEFT) ---
+    # --- 1. USER PROFILE & WALLET (TOP LEFT) ---
     clean_username = clean_text(pnl.display_user)
 
     avatar_raw = None
@@ -144,71 +257,98 @@ async def render_pnl_card(
         avatar_raw = await download_image(collection.image_url)
 
     first_letter = (clean_username[:1] if clean_username else "U").upper()
-    avatar = make_squircle_avatar(avatar_raw, size=48, radius=12, fallback_letter=first_letter)
-    base_card.paste(avatar, (42, 42), mask=avatar)
+    avatar = make_squircle_avatar(avatar_raw, size=50, radius=13, fallback_letter=first_letter)
+    base_card.paste(avatar, (42, 40), mask=avatar)
 
-    font_user = get_font(22, bold=True)
-    draw.text((104, 54), clean_username, fill=white, font=font_user)
+    # Username in Space Grotesk Bold
+    font_user = get_space_grotesk(22, weight="bold")
+    draw.text((106, 44), clean_username, fill=white, font=font_user)
+
+    # Address / Network in JetBrains Mono
+    font_wallet = get_jetbrains_mono(13, weight="medium")
+    short_wallet = (
+        f"{pnl.wallet_address[:6]}...{pnl.wallet_address[-4:]}"
+        if len(pnl.wallet_address) > 12
+        else pnl.wallet_address
+    )
+    chain_tag = f"[{pnl.chain.upper()}] {short_wallet}"
+    draw.text((106, 70), chain_tag, fill=gray_mono, font=font_wallet)
 
     # --- 2. COLLECTION SECTION ---
-    font_col_label = get_font(15, bold=False)
-    draw.text((42, 138), "Collection", fill=gray_label, font=font_col_label)
+    font_col_label = get_space_grotesk(12, weight="medium")
+    draw_tracked_text(draw, (42, 136), "COLLECTION", font_col_label, gray_label, letter_spacing=2.5)
 
     col_name = clean_text(collection.name or "NFT Collection")
-    font_size = 44 if len(col_name) <= 16 else (36 if len(col_name) <= 24 else 28)
-    font_col_name = get_font(font_size, bold=True)
-    draw.text((42, 168), col_name, fill=white, font=font_col_name)
+    font_size = 42 if len(col_name) <= 16 else (34 if len(col_name) <= 24 else 26)
+    font_col_name = get_space_grotesk(font_size, weight="extrabold")
+    draw.text((42, 160), col_name, fill=white, font=font_col_name)
+
+    # Contract address tag in JetBrains Mono if available
+    if collection.contract_address and collection.contract_address.startswith("0x"):
+        short_contract = f"{collection.contract_address[:6]}...{collection.contract_address[-4:]}"
+        font_contract = get_jetbrains_mono(12, weight="regular")
+        draw.text((42, 215), short_contract, fill=(110, 120, 135), font=font_contract)
 
     # --- 3. 4-COLUMN STATS ROW ---
-    font_stat_lbl = get_font(14, bold=False)
-    font_stat_val = get_font(24, bold=True)
+    font_stat_lbl = get_space_grotesk(12, weight="medium")
+    font_stat_val = get_space_grotesk(24, weight="semibold")
 
     stats = [
-        {"lbl": f"Minted {pnl.minted_count}", "val": f"{pnl.minted_native:.3f}", "x": 42},
-        {"lbl": f"Bought {pnl.bought_count}", "val": f"{pnl.bought_native:.3f}", "x": 165},
-        {"lbl": f"Sold {pnl.sold_count}",     "val": f"{pnl.sold_native:.3f}",   "x": 285},
-        {"lbl": f"Holding {pnl.held_count}",  "val": f"{pnl.held_value_native:.3f}", "x": 405},
+        {"lbl": f"MINTED {pnl.minted_count}", "val": f"{pnl.minted_native:.3f}", "x": 42},
+        {"lbl": f"BOUGHT {pnl.bought_count}", "val": f"{pnl.bought_native:.3f}", "x": 165},
+        {"lbl": f"SOLD {pnl.sold_count}",     "val": f"{pnl.sold_native:.3f}",   "x": 285},
+        {"lbl": f"HOLDING {pnl.held_count}",  "val": f"{pnl.held_value_native:.3f}", "x": 405},
     ]
 
     # Subtle vertical separators between columns
     for sep_x in [145, 265, 385]:
-        draw.line([(sep_x, 272), (sep_x, 328)], fill=sep_color, width=1)
+        draw.line([(sep_x, 268), (sep_x, 326)], fill=sep_color, width=1)
 
     for st in stats:
-        draw.text((st["x"], 270), st["lbl"], fill=gray_label, font=font_stat_lbl)
-        draw.text((st["x"], 298), st["val"], fill=white, font=font_stat_val)
+        draw_tracked_text(draw, (st["x"], 266), st["lbl"], font_stat_lbl, gray_label, letter_spacing=1.5)
+        draw.text((st["x"], 294), st["val"], fill=white, font=font_stat_val)
 
         bbox = font_stat_val.getbbox(st["val"])
         val_w = bbox[2] - bbox[0]
-        draw_eth_diamond(draw, st["x"] + val_w + 10, 313, size=14, color=white)
+        draw_eth_diamond(draw, st["x"] + val_w + 10, 310, size=14, color=white)
 
     # --- 4. PNL HERO SECTION ---
-    font_pnl_lbl = get_font(16, bold=True)
-    draw.text((42, 365), "PNL", fill=accent_color, font=font_pnl_lbl)
+    font_pnl_lbl = get_space_grotesk(14, weight="medium")
+    draw_tracked_text(draw, (42, 362), "PNL", font_pnl_lbl, accent_color, letter_spacing=3.0)
 
-    font_pnl_val = get_font(54, bold=True)
-    draw.text((42, 396), pnl.formatted_usd_pnl, fill=accent_color, font=font_pnl_val)
+    # Hero PnL number in Space Grotesk Bold with subtle neon glow
+    font_pnl_val = get_space_grotesk(54, weight="bold")
+    draw_hero_pnl_with_glow(base_card, (42, 392), pnl.formatted_usd_pnl, font_pnl_val, accent_color, pnl.is_profit)
 
-    # Subline: ( ▲ 1383%  |  +0.221 ♦ )
-    font_pnl_sub = get_font(18, bold=True)
-    arrow = "▲" if pnl.is_profit else "▼"
+    # Subline: ( ▲ 1383%  |  +0.221 ♦ ) in Space Grotesk SemiBold
+    font_pnl_sub = get_space_grotesk(18, weight="semibold")
     roi_str = f"{abs(pnl.roi_percentage):.0f}%"
     native_str = pnl.formatted_native_pnl
 
-    sub_prefix = f"( {arrow} {roi_str}  |  {native_str} "
-    draw.text((42, 474), sub_prefix, fill=accent_color, font=font_pnl_sub)
-
-    sub_bbox = font_pnl_sub.getbbox(sub_prefix)
-    sub_w = sub_bbox[2] - sub_bbox[0]
+    # Draw opening parenthesis
+    draw.text((42, 472), "(", fill=accent_color, font=font_pnl_sub)
     
-    draw_eth_diamond(draw, 42 + sub_w + 5, 485, size=13, color=accent_color)
-    draw.text((42 + sub_w + 14, 474), ")", fill=accent_color, font=font_pnl_sub)
+    # Draw vector triangle arrow
+    draw_arrow_triangle(draw, cx=58, cy=483, size=12, is_up=pnl.is_profit, color=accent_color)
+
+    # Draw ROI and native value
+    mid_text = f" {roi_str}  |  {native_str} "
+    draw.text((68, 472), mid_text, fill=accent_color, font=font_pnl_sub)
+
+    mid_bbox = font_pnl_sub.getbbox(mid_text)
+    mid_w = mid_bbox[2] - mid_bbox[0]
+
+    # Draw diamond glyph and closing parenthesis
+    dia_x = 68 + mid_w + 4
+    draw_eth_diamond(draw, dia_x, 483, size=13, color=accent_color)
+    draw.text((dia_x + 10, 472), ")", fill=accent_color, font=font_pnl_sub)
 
     # --- 5. FOOTER ---
-    font_footer = get_font(14, bold=False)
-    draw.text((820, 525), "discord.gg/egodao", fill=(85, 92, 102), font=font_footer)
+    font_footer = get_jetbrains_mono(13, weight="regular")
+    draw.text((815, 526), "discord.gg/egodao", fill=(90, 98, 110), font=font_footer)
 
     buffer = io.BytesIO()
     base_card.convert("RGB").save(buffer, format="PNG", quality=95)
     buffer.seek(0)
     return buffer
+
