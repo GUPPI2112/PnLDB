@@ -1,5 +1,6 @@
 import io
 import logging
+import re
 from pathlib import Path
 from typing import Optional, Tuple
 import aiohttp
@@ -13,8 +14,14 @@ FONTS_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "fonts"
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "templates"
 
 
+def clean_text(text: str) -> str:
+    """Strips emojis and non-ascii characters to ensure clean typography without missing glyph boxes."""
+    cleaned = re.sub(r"[^\x20-\x7E]+", "", text).strip()
+    return cleaned if cleaned else "User"
+
+
 def get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    """Loads bundled TrueType font with fallbacks."""
+    """Loads bundled modern Inter font."""
     font_file = "Font-Bold.ttf" if bold else "Font-Regular.ttf"
     local_path = FONTS_DIR / font_file
 
@@ -23,18 +30,6 @@ def get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
             return ImageFont.truetype(str(local_path), size)
         except Exception:
             pass
-
-    fallbacks = [
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/System/Library/Fonts/Helvetica.ttc",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    for fb in fallbacks:
-        if Path(fb).exists():
-            try:
-                return ImageFont.truetype(fb, size)
-            except Exception:
-                continue
 
     return ImageFont.load_default()
 
@@ -50,7 +45,7 @@ async def download_image(url: str) -> Optional[Image.Image]:
                     content = await resp.read()
                     return Image.open(io.BytesIO(content)).convert("RGBA")
     except Exception as e:
-        logger.warning("Could not download image from %s: %s", url, e)
+        logger.warning("Could not download avatar from %s: %s", url, e)
     return None
 
 
@@ -71,7 +66,6 @@ def make_squircle_avatar(
         resized = ImageOps.fit(raw_img, (size, size), method=Image.Resampling.LANCZOS)
         output.paste(resized, (0, 0), mask=mask)
     else:
-        # Fallback stylized avatar
         draw = ImageDraw.Draw(output)
         draw.rounded_rectangle([0, 0, size - 1, size - 1], radius=radius, fill=(30, 36, 46))
         font = get_font(int(size * 0.45), bold=True)
@@ -108,7 +102,7 @@ async def render_pnl_card(
 ) -> io.BytesIO:
     """
     Renders the exact PnL Card format based on pnltemp and pnlref.
-    Features the user's Discord name and Discord profile picture.
+    Features user's Discord name and Discord profile picture without broken emoji boxes.
     """
     width, height = 1024, 576
 
@@ -141,25 +135,26 @@ async def render_pnl_card(
     sep_color = (35, 42, 52)
 
     # --- 1. USER PROFILE (TOP LEFT) ---
-    # Prioritize user's Discord avatar, then collection image
+    clean_username = clean_text(pnl.display_user)
+
     avatar_raw = None
     if pnl.user_avatar_url:
         avatar_raw = await download_image(pnl.user_avatar_url)
     elif collection.image_url:
         avatar_raw = await download_image(collection.image_url)
 
-    first_letter = (pnl.display_user[:1] if pnl.display_user else "U").upper()
+    first_letter = (clean_username[:1] if clean_username else "U").upper()
     avatar = make_squircle_avatar(avatar_raw, size=48, radius=12, fallback_letter=first_letter)
     base_card.paste(avatar, (42, 42), mask=avatar)
 
     font_user = get_font(22, bold=True)
-    draw.text((104, 54), pnl.display_user, fill=white, font=font_user)
+    draw.text((104, 54), clean_username, fill=white, font=font_user)
 
     # --- 2. COLLECTION SECTION ---
     font_col_label = get_font(15, bold=False)
     draw.text((42, 138), "Collection", fill=gray_label, font=font_col_label)
 
-    col_name = collection.name or "NFT Collection"
+    col_name = clean_text(collection.name or "NFT Collection")
     font_size = 44 if len(col_name) <= 16 else (36 if len(col_name) <= 24 else 28)
     font_col_name = get_font(font_size, bold=True)
     draw.text((42, 168), col_name, fill=white, font=font_col_name)
