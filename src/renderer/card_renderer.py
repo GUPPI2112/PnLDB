@@ -98,13 +98,17 @@ async def download_image(url: str) -> Optional[Image.Image]:
     if not url:
         return None
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "image/avif,image/webp,image/png,image/*,*/*;q=0.8",
+        }
+        async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=6)) as session:
             async with session.get(url) as resp:
                 if resp.status == 200:
                     content = await resp.read()
                     return Image.open(io.BytesIO(content)).convert("RGBA")
     except Exception as e:
-        logger.warning("Could not download avatar from %s: %s", url, e)
+        logger.warning("Could not download image from %s: %s", url, e)
     return None
 
 
@@ -287,10 +291,25 @@ async def render_pnl_card(
     col_avatar = make_squircle_avatar(col_img_raw, size=48, radius=12, fallback_letter=first_col_letter)
     base_card.paste(col_avatar, (52, 162), mask=col_avatar)
 
-    # Collection Name right beside the PFP
-    font_size = 40 if len(col_name) <= 14 else (32 if len(col_name) <= 20 else 24)
-    font_col_name = get_space_grotesk(font_size, weight="extrabold")
-    draw.text((112, 164), col_name, fill=white, font=font_col_name)
+    # Collection Name right beside the PFP (auto-scales so it never collides with PNL section)
+    max_title_w = 440
+    chosen_font_size = 36
+    font_col_name = get_space_grotesk(chosen_font_size, weight="extrabold")
+    for fs in [36, 32, 28, 24, 20, 18, 16]:
+        candidate_font = get_space_grotesk(fs, weight="extrabold")
+        bbox = candidate_font.getbbox(col_name)
+        w = (bbox[2] - bbox[0]) if bbox else 100
+        if w <= max_title_w:
+            font_col_name = candidate_font
+            chosen_font_size = fs
+            break
+
+    # Vertically align title with avatar
+    title_bbox = font_col_name.getbbox(col_name)
+    title_h = (title_bbox[3] - title_bbox[1]) if title_bbox else 24
+    avatar_center_y = 162 + 24
+    title_y = int(avatar_center_y - (title_h / 2) - 4)
+    draw.text((112, title_y), col_name, fill=white, font=font_col_name)
 
     # Right Side: PNL HERO (Symmetrically aligned on the right half)
     pnl_x = 580

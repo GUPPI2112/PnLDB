@@ -62,11 +62,48 @@ COINGECKO_MAP: Dict[str, str] = {
 }
 
 
+BLOCKSCOUT_DOMAINS: Dict[str, str] = {
+    "ethereum": "eth.blockscout.com",
+    "eth": "eth.blockscout.com",
+    "mainnet": "eth.blockscout.com",
+    "base": "base.blockscout.com",
+    "arbitrum": "arbitrum.blockscout.com",
+    "arb": "arbitrum.blockscout.com",
+    "robinhood": "arbitrum.blockscout.com",
+    "polygon": "polygon.blockscout.com",
+    "matic": "polygon.blockscout.com",
+    "pol": "polygon.blockscout.com",
+    "optimism": "optimism.blockscout.com",
+    "op": "optimism.blockscout.com",
+    "blast": "blast.blockscout.com",
+    "zora": "zora.blockscout.com",
+}
+
+
+OPENSEA_CHAIN_MAP: Dict[str, str] = {
+    "ethereum": "ethereum",
+    "eth": "ethereum",
+    "mainnet": "ethereum",
+    "base": "base",
+    "arbitrum": "arbitrum",
+    "arb": "arbitrum",
+    "robinhood": "arbitrum",
+    "polygon": "matic",
+    "matic": "matic",
+    "pol": "matic",
+    "optimism": "optimism",
+    "op": "optimism",
+    "blast": "blast",
+    "zora": "zora",
+    "apechain": "apechain",
+}
+
+
 class MultiChainProvider(NFTDataProvider):
     """
     Robust Multi-chain NFT data provider supporting ERC-721 and ERC-1155,
     exact mint & sale prices from tx values, internal transactions, WETH transfers,
-    collection metadata, and real-time floor prices across all chains.
+    OpenSea collection metadata & avatars, and real-time floor prices across all chains.
     """
 
     def __init__(self):
@@ -77,7 +114,8 @@ class MultiChainProvider(NFTDataProvider):
             self._session = aiohttp.ClientSession(
                 headers={
                     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "application/json",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
                 },
                 timeout=aiohttp.ClientTimeout(total=12),
             )
@@ -113,6 +151,59 @@ class MultiChainProvider(NFTDataProvider):
         }
         return fallbacks.get(coin_id, 2500.0)
 
+    async def _fetch_opensea_metadata(
+        self, contract: str, chain: str
+    ) -> Tuple[Optional[str], Optional[str], float]:
+        """
+        Fetches official collection name, avatar image, and floor price from OpenSea.
+        """
+        chain_slug = OPENSEA_CHAIN_MAP.get(chain.lower(), "ethereum")
+        url = f"https://opensea.io/assets/{chain_slug}/{contract}"
+        session = await self._get_session()
+        try:
+            async with session.get(url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+                if resp.status == 200:
+                    html = await resp.text()
+
+                    # 1. Extract collection title
+                    title_match = re.search(r'<meta\s+property=[\"\']og:title[\"\']\s+content=[\"\']([^\"\']+)[\"\']', html, re.I)
+                    name = None
+                    floor_price = 0.0
+
+                    if title_match:
+                        raw_title = title_match.group(1)
+
+                        # Extract floor price if present: e.g. '0.0005 ETH'
+                        floor_match = re.search(r'([\d\.]+)\s+(?:ETH|MATIC|POL|WETH|SOL)', raw_title, re.I)
+                        if floor_match:
+                            try:
+                                floor_price = float(floor_match.group(1))
+                            except Exception:
+                                pass
+
+                        clean = re.sub(r'(\s+[\d\.]+\s+[A-Za-z]+)?\s*-\s*Collection\s*\|\s*OpenSea.*', '', raw_title, flags=re.I).strip()
+                        clean = re.sub(r'\s*\|\s*OpenSea.*', '', clean, flags=re.I).strip()
+                        if ' - ' in clean and '#' in clean.split(' - ')[0]:
+                            clean = clean.split(' - ', 1)[1].strip()
+                        if clean and clean.lower() not in ['opensea', 'exchange everything', 'contract', 'collection']:
+                            name = clean
+
+                    # 2. Extract collection avatar / logo image
+                    image_url = None
+                    imgs = re.findall(r'<img[^>]+src=[\"\']([^\"\']*(?:image_type_logo|image_type_avatar|h=250|/image/)[^\"\']*)[\"\']', html)
+                    if imgs:
+                        image_url = imgs[0].replace('&amp;', '&').split('?')[0]
+
+                    if not image_url:
+                        og_img = re.search(r'<meta\s+property=[\"\']og:image[\"\']\s+content=[\"\']([^\"\']+)[\"\']', html, re.I)
+                        if og_img and ('opengraph-image' in og_img.group(1) or 'seadn.io' in og_img.group(1)):
+                            image_url = og_img.group(1)
+
+                    return name, image_url, floor_price
+        except Exception as e:
+            logger.debug("OpenSea metadata lookup error for %s: %s", contract, e)
+        return None, None, 0.0
+
     async def get_collection_metadata(
         self, contract_address: str, chain: str
     ) -> CollectionMeta:
@@ -127,50 +218,59 @@ class MultiChainProvider(NFTDataProvider):
 
         image_url = None
         floor_price = 0.0
+        session = await self._get_session()
 
-        # 1. Try OpenSea contract & slug metadata
-        try:
-            os_chain = "ethereum"
-            if "base" in chain.lower():
-                os_chain = "base"
-            elif "polygon" in chain.lower():
-                os_chain = "matic"
-            elif "arbitrum" in chain.lower() or "robinhood" in chain.lower():
-                os_chain = "arbitrum"
-            elif "optimism" in chain.lower():
-                os_chain = "optimism"
-            elif "zora" in chain.lower():
-                os_chain = "zora"
-            elif "blast" in chain.lower():
-                os_chain = "blast"
+        if norm_contract.startswith("0x") and len(norm_contract) == 42:
+            # 1. Primary: Try OpenSea collection & avatar resolution
+            os_name, os_img, os_floor = await self._fetch_opensea_metadata(norm_contract, chain)
+            if os_name:
+                display_name = os_name
+            if os_img:
+                image_url = os_img
+            if os_floor > 0:
+                floor_price = os_floor
 
-            session = await self._get_session()
-            if norm_contract.startswith("0x") and len(norm_contract) == 42:
-                url = f"https://api.opensea.io/api/v2/chain/{os_chain}/contract/{norm_contract}"
-                async with session.get(url) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if data.get("name"):
-                            display_name = data["name"]
-                        if data.get("image_url"):
-                            image_url = data["image_url"]
+            # 2. Fallback / Secondary: Blockscout Token API
+            domain = BLOCKSCOUT_DOMAINS.get(chain.lower(), "eth.blockscout.com")
+            if not image_url or display_name.startswith("NFT (0x"):
+                url_token = f"https://{domain}/api/v2/tokens/{norm_contract}"
+                try:
+                    async with session.get(url_token, timeout=aiohttp.ClientTimeout(total=4)) as resp:
+                        if resp.status == 200:
+                            tdata = await resp.json()
+                            if tdata.get("name") and display_name.startswith("NFT (0x"):
+                                display_name = tdata["name"]
+                            if tdata.get("icon_url") and not image_url:
+                                image_url = tdata["icon_url"]
+                except Exception as e:
+                    logger.debug("Blockscout token lookup error: %s", e)
 
-            # Try collection slug lookup for image and floor price
-            slug = re.sub(r"[^a-zA-Z0-9-]", "", norm_contract.lower())
-            if slug:
-                col_url = f"https://api.opensea.io/api/v2/collections/{slug}"
-                async with session.get(col_url) as resp:
-                    if resp.status == 200:
-                        cdata = await resp.json()
-                        if cdata.get("name"):
-                            display_name = cdata["name"]
-                        if cdata.get("image_url"):
-                            image_url = cdata["image_url"]
-                        contracts = cdata.get("contracts", [])
-                        if contracts and isinstance(contracts, list) and contracts[0].get("address"):
-                            norm_contract = contracts[0]["address"]
-        except Exception as e:
-            logger.debug("OpenSea metadata lookup error: %s", e)
+            # 3. Fallback / Tertiary: Blockscout NFT instance image
+            if not image_url:
+                url_inst = f"https://{domain}/api/v2/tokens/{norm_contract}/instances"
+                try:
+                    async with session.get(url_inst, timeout=aiohttp.ClientTimeout(total=4)) as resp:
+                        if resp.status == 200:
+                            idata = await resp.json()
+                            items = idata.get("items", [])
+                            if items:
+                                if display_name.startswith("NFT (0x") and items[0].get("metadata", {}).get("name"):
+                                    item_nm = items[0]["metadata"]["name"]
+                                    # Strip '#...' from item name
+                                    clean_item_nm = re.sub(r'\s*#\d+.*', '', item_nm).strip()
+                                    if clean_item_nm:
+                                        display_name = clean_item_nm
+                                img = items[0].get("image_url") or items[0].get("metadata", {}).get("image")
+                                if img:
+                                    if img.startswith("ipfs://"):
+                                        img = "https://ipfs.io/ipfs/" + img[7:]
+                                    image_url = img
+                except Exception as e:
+                    logger.debug("Blockscout instance lookup error: %s", e)
+
+        # 4. If user entered a collection name directly, preserve it
+        if not norm_contract.startswith("0x"):
+            display_name = norm_contract
 
         return CollectionMeta(
             contract_address=norm_contract,
