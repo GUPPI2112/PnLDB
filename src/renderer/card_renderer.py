@@ -277,37 +277,47 @@ async def render_pnl_card(
     # --- 2. MAIN SPLIT SECTION (COLLECTION LEFT, HERO PNL RIGHT) ---
     # Left Side: COLLECTION
     font_col_lbl = get_space_grotesk(13, weight="medium")
-    draw_tracked_text(draw, (52, 138), "COLLECTION", font_col_lbl, gray_label, letter_spacing=2.5)
+    draw_tracked_text(draw, (52, 134), "COLLECTION", font_col_lbl, gray_label, letter_spacing=2.5)
+
+    # Collection PFP Avatar
+    col_img_raw = None
+    if collection.image_url:
+        col_img_raw = await download_image(collection.image_url)
 
     col_name = clean_text(collection.name or "NFT Collection")
-    font_size = 44 if len(col_name) <= 14 else (36 if len(col_name) <= 20 else 28)
+    first_col_letter = (col_name[:1] if col_name else "N").upper()
+    col_avatar = make_squircle_avatar(col_img_raw, size=48, radius=12, fallback_letter=first_col_letter)
+    base_card.paste(col_avatar, (52, 162), mask=col_avatar)
+
+    # Collection Name right beside the PFP
+    font_size = 40 if len(col_name) <= 14 else (32 if len(col_name) <= 20 else 24)
     font_col_name = get_space_grotesk(font_size, weight="extrabold")
-    draw.text((52, 164), col_name, fill=white, font=font_col_name)
+    draw.text((112, 164), col_name, fill=white, font=font_col_name)
 
     # Right Side: PNL HERO
     pnl_x = 640
     font_pnl_lbl = get_space_grotesk(13, weight="medium")
-    draw_tracked_text(draw, (pnl_x, 138), "PNL", font_pnl_lbl, accent_color, letter_spacing=3.0)
+    draw_tracked_text(draw, (pnl_x, 134), "PNL", font_pnl_lbl, accent_color, letter_spacing=3.0)
 
     font_pnl_val = get_space_grotesk(54, weight="bold")
-    draw_hero_pnl_with_glow(base_card, (pnl_x, 162), pnl.formatted_usd_pnl, font_pnl_val, accent_color, pnl.is_profit)
+    draw_hero_pnl_with_glow(base_card, (pnl_x, 160), pnl.formatted_usd_pnl, font_pnl_val, accent_color, pnl.is_profit)
 
     # Subline right below PnL: ( ▲ 1383%  |  +0.221 ♦ )
     font_pnl_sub = get_space_grotesk(18, weight="semibold")
     roi_str = f"{abs(pnl.roi_percentage):.0f}%"
     native_str = pnl.formatted_native_pnl
 
-    draw.text((pnl_x, 230), "(", fill=accent_color, font=font_pnl_sub)
-    draw_arrow_triangle(draw, cx=pnl_x + 16, cy=241, size=11, is_up=pnl.is_profit, color=accent_color)
+    draw.text((pnl_x, 228), "(", fill=accent_color, font=font_pnl_sub)
+    draw_arrow_triangle(draw, cx=pnl_x + 16, cy=239, size=11, is_up=pnl.is_profit, color=accent_color)
 
     mid_text = f" {roi_str}  |  {native_str} "
-    draw.text((pnl_x + 26, 230), mid_text, fill=accent_color, font=font_pnl_sub)
+    draw.text((pnl_x + 26, 228), mid_text, fill=accent_color, font=font_pnl_sub)
     mid_bbox = font_pnl_sub.getbbox(mid_text)
     mid_w = (mid_bbox[2] - mid_bbox[0]) if mid_bbox else 80
 
     dia_x = pnl_x + 26 + mid_w + 3
-    draw_eth_diamond(draw, dia_x, 241, size=12, color=accent_color)
-    draw.text((dia_x + 9, 230), ")", fill=accent_color, font=font_pnl_sub)
+    draw_eth_diamond(draw, dia_x, 239, size=12, color=accent_color)
+    draw.text((dia_x + 9, 228), ")", fill=accent_color, font=font_pnl_sub)
 
     # --- 3. 4-COLUMN PERFORMANCE STATS (WIDE ROW ACROSS FULL WIDTH) ---
     font_stat_lbl = get_space_grotesk(12, weight="medium")
