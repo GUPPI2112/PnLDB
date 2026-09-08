@@ -294,8 +294,8 @@ async def render_pnl_card(
     font_col_name = get_space_grotesk(font_size, weight="extrabold")
     draw.text((112, 164), col_name, fill=white, font=font_col_name)
 
-    # Right Side: PNL HERO
-    pnl_x = 640
+    # Right Side: PNL HERO (Symmetrically aligned on the right half)
+    pnl_x = 580
     font_pnl_lbl = get_space_grotesk(13, weight="medium")
     draw_tracked_text(draw, (pnl_x, 134), "PNL", font_pnl_lbl, accent_color, letter_spacing=3.0)
 
