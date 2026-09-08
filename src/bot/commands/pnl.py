@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 def is_valid_address(address: str) -> bool:
     addr = address.strip()
-    return len(addr) >= 4
+    return len(addr) >= 2
 
 
 async def execute_pnl_check(

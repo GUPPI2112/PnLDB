@@ -159,3 +159,50 @@ def test_free_airdrop():
     assert res.net_pnl_native == 0.5
     assert res.roi_percentage == 100.0
     assert res.is_profit is True
+
+
+def test_mint_and_sell_scenario():
+    # User minted at 0.05 ETH and sold at 0.35 ETH -> Net PnL = +0.30 ETH
+    events = [
+        ActivityEvent(
+            tx_hash="0x1",
+            timestamp=1000,
+            token_id="77",
+            activity_type=ActivityType.MINT,
+            from_address="0x0000000000000000000000000000000000000000",
+            to_address=WALLET,
+            price_native=0.05,
+        ),
+        ActivityEvent(
+            tx_hash="0x2",
+            timestamp=2000,
+            token_id="77",
+            activity_type=ActivityType.SELL,
+            from_address=WALLET,
+            to_address="0xbuyer",
+            price_native=0.35,
+        ),
+    ]
+
+    res = calculate_nft_pnl(
+        events=events,
+        wallet_address=WALLET,
+        contract_address=CONTRACT,
+        chain="ethereum",
+        currency_symbol="ETH",
+        floor_price_native=0.20,
+        native_price_usd=2500.0,
+    )
+
+    assert res.minted_count == 1
+    assert res.minted_native == 0.05
+    assert res.sold_count == 1
+    assert res.sold_native == 0.35
+    assert res.held_count == 0
+    assert res.total_invested == 0.05
+    assert res.total_received == 0.35
+    assert res.net_pnl_native == 0.30
+    assert res.net_pnl_usd == 750.0
+    assert res.roi_percentage == 600.0
+    assert res.is_profit is True
+

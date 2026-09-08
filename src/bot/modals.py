@@ -18,17 +18,17 @@ class PnLModal(ui.Modal):
             placeholder="0x1234...5678 (or SOL/BTC address)",
             style=discord.TextStyle.short,
             required=True,
-            min_length=4,
+            min_length=3,
             max_length=80,
         )
         self.add_item(self.wallet_input)
 
         self.contract_input = ui.TextInput(
             label="NFT Contract Address / Collection ID",
-            placeholder="0xabcd...ef01 (or collection name)",
+            placeholder="0xabcd...ef01 (or collection name e.g. MV3)",
             style=discord.TextStyle.short,
             required=True,
-            min_length=4,
+            min_length=2,
             max_length=80,
         )
         self.add_item(self.contract_input)

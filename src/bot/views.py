@@ -61,7 +61,7 @@ class PnLLauncherView(discord.ui.View):
 class PnLResultView(discord.ui.View):
     """
     Action view accompanying the generated PnL card.
-    Contains a direct 'Download Card' button with zero emojis.
+    Contains 'Download Card' link button and a 'Dismiss' button.
     """
 
     def __init__(self, download_url: Optional[str] = None):
@@ -74,3 +74,18 @@ class PnLResultView(discord.ui.View):
                     url=download_url,
                 )
             )
+
+    @discord.ui.button(
+        label="Dismiss",
+        style=discord.ButtonStyle.secondary,
+        custom_id="nft_pnl_dismiss_btn",
+    )
+    async def dismiss_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        try:
+            await interaction.response.defer()
+            await interaction.delete_original_response()
+        except Exception:
+            pass
+
