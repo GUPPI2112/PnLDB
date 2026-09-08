@@ -5,30 +5,31 @@ from src.config import config
 
 class PnLModal(ui.Modal, title="Check NFT PnL"):
     """
-    Simple form modal for submitting wallet address, NFT contract, and chain.
+    Form modal allowing user to submit their wallet address,
+    NFT contract address, and blockchain choice (ETH, Base, SOL, BTC, Robinhood, etc.).
     """
 
     wallet_input = ui.TextInput(
         label="Wallet Address",
-        placeholder="0x1234...5678",
+        placeholder="0x1234...5678 (or Solana/BTC address)",
         style=discord.TextStyle.short,
         required=True,
-        min_length=10,
-        max_length=64,
+        min_length=6,
+        max_length=80,
     )
 
     contract_input = ui.TextInput(
-        label="NFT Contract Address",
-        placeholder="0xabcd...ef01",
+        label="NFT Contract Address / Collection ID",
+        placeholder="0xabcd...ef01 (or collection name/symbol)",
         style=discord.TextStyle.short,
         required=True,
-        min_length=10,
-        max_length=64,
+        min_length=4,
+        max_length=80,
     )
 
     chain_input = ui.TextInput(
-        label="Blockchain Network",
-        placeholder="ethereum, base, polygon, arbitrum, optimism (default: ethereum)",
+        label="Blockchain (ETH, Base, SOL, BTC, Robinhood)",
+        placeholder="Type: eth, base, sol, btc, robinhood, polygon, arb (default: eth)",
         style=discord.TextStyle.short,
         required=False,
         max_length=32,

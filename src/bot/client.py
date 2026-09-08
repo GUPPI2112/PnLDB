@@ -89,10 +89,10 @@ class NFTPnLBot(commands.Bot):
                 )
                 embed.add_field(
                     name="Supported Chains",
-                    value="Base, Ethereum, Polygon, Arbitrum, Optimism, Blast, Zora, ApeChain",
+                    value="ETH, Base, SOL, BTC (Ordinals), Robinhood, Polygon, Arbitrum, Optimism, Blast, Zora, ApeChain",
                     inline=False,
                 )
-                embed.set_footer(text="Powered by Reservoir Multi-Chain API")
+                embed.set_footer(text="Multi-Chain NFT PnL Tracker")
 
                 view = PnLLauncherView()
                 await channel.send(embed=embed, view=view)

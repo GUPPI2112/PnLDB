@@ -10,11 +10,13 @@ from src.bot.views import PnLResultView
 
 logger = logging.getLogger(__name__)
 
-ETH_ADDRESS_PATTERN = re.compile(r"^0x[a-fA-F0-9]{40}$")
-
 
 def is_valid_address(address: str) -> bool:
-    return bool(ETH_ADDRESS_PATTERN.match(address.strip()))
+    addr = address.strip()
+    # EVM address (0x...) or Solana (base58) or Bitcoin (bc1 / 1 / 3)
+    if len(addr) < 4:
+        return False
+    return True
 
 
 async def execute_pnl_check(
@@ -33,14 +35,14 @@ async def execute_pnl_check(
     # 1. Validation
     if not is_valid_address(wallet):
         await interaction.followup.send(
-            f"Invalid wallet address: `{wallet}`. Please provide a valid 42-character EVM address (e.g. `0x1234...`).",
+            f"Invalid wallet address: `{wallet}`. Please provide a valid address.",
             ephemeral=True,
         )
         return
 
     if not is_valid_address(contract):
         await interaction.followup.send(
-            f"Invalid NFT contract address: `{contract}`. Please provide a valid 42-character EVM address (e.g. `0xabcd...`).",
+            f"Invalid NFT contract address: `{contract}`. Please provide a valid contract address.",
             ephemeral=True,
         )
         return
@@ -61,7 +63,7 @@ async def execute_pnl_check(
         activities = await provider.get_user_activity(wallet, contract, chain_cfg.name)
 
         if not activities:
-            short_w = f"{wallet[:6]}...{wallet[-4:]}"
+            short_w = f"{wallet[:6]}...{wallet[-4:]}" if len(wallet) >= 10 else wallet
             await interaction.followup.send(
                 f"No transaction or trading activity found for wallet `{short_w}` in collection **{collection_meta.name}** on **{chain_cfg.display_name}**.",
                 ephemeral=False,
@@ -111,14 +113,17 @@ async def execute_pnl_check(
 
 @app_commands.command(name="pnl", description="Generate an NFT PnL card for a wallet and collection")
 @app_commands.describe(
-    wallet="Your EVM wallet address (0x...)",
-    contract="The NFT contract address (0x...)",
-    chain="The blockchain network (base, ethereum, polygon, arbitrum, optimism)",
+    wallet="Your wallet address (0x... or SOL/BTC)",
+    contract="The NFT contract address or collection ID",
+    chain="The blockchain network (eth, base, sol, btc, robinhood, polygon, arbitrum, optimism)",
 )
 @app_commands.choices(
     chain=[
-        app_commands.Choice(name="Base", value="base"),
         app_commands.Choice(name="Ethereum", value="ethereum"),
+        app_commands.Choice(name="Base", value="base"),
+        app_commands.Choice(name="Solana", value="solana"),
+        app_commands.Choice(name="Bitcoin (Ordinals)", value="bitcoin"),
+        app_commands.Choice(name="Robinhood", value="robinhood"),
         app_commands.Choice(name="Polygon", value="polygon"),
         app_commands.Choice(name="Arbitrum", value="arbitrum"),
         app_commands.Choice(name="Optimism", value="optimism"),
