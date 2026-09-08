@@ -16,6 +16,7 @@ class NFTPnLBot(commands.Bot):
 
     def __init__(self):
         intents = discord.Intents.default()
+        intents.message_content = True
         super().__init__(
             command_prefix="!",
             intents=intents,
@@ -49,6 +50,56 @@ class NFTPnLBot(commands.Bot):
                     type=discord.ActivityType.watching,
                     name="NFT PnLs | Click Check PnL",
                 )
+            )
+
+        # Auto-post the Check PnL panel to the specified channel if configured
+        if config.PNL_CHANNEL_ID:
+            await self.auto_post_panel(config.PNL_CHANNEL_ID)
+
+    async def on_guild_join(self, guild: discord.Guild):
+        logger.info("Joined new guild: %s (ID: %s)", guild.name, guild.id)
+        if config.PNL_CHANNEL_ID:
+            await self.auto_post_panel(config.PNL_CHANNEL_ID)
+
+    async def auto_post_panel(self, channel_id: int):
+        try:
+            channel = self.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await self.fetch_channel(channel_id)
+                except Exception:
+                    channel = None
+
+            if isinstance(channel, (discord.TextChannel, discord.Thread)):
+                # Check recent messages to avoid duplicate panel posting
+                async for msg in channel.history(limit=10):
+                    if msg.author == self.user and msg.components:
+                        logger.info("Check PnL panel already active in channel %s", channel_id)
+                        return
+
+                embed = discord.Embed(
+                    title="NFT PnL Tracker",
+                    description=(
+                        "Calculate your NFT collection PnL, ROI %, and trade statistics across multiple chains.\n\n"
+                        "Click **Check PnL** below to open the form and generate your custom card."
+                    ),
+                    color=discord.Color.from_rgb(47, 230, 149),
+                )
+                embed.add_field(
+                    name="Supported Chains",
+                    value="Base, Ethereum, Polygon, Arbitrum, Optimism, Blast, Zora, ApeChain",
+                    inline=False,
+                )
+                embed.set_footer(text="Powered by Reservoir Multi-Chain API")
+
+                view = PnLLauncherView()
+                await channel.send(embed=embed, view=view)
+                logger.info("Successfully posted Check PnL panel to channel %s", channel_id)
+        except Exception as e:
+            logger.warning(
+                "Could not auto-post panel to channel %s: %s (You can also run /setup manually in the channel)",
+                channel_id,
+                e,
             )
 
 

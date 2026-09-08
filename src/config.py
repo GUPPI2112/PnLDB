@@ -95,6 +95,9 @@ class Config:
     DISCORD_GUILD_ID: Optional[int] = (
         int(os.getenv("DISCORD_GUILD_ID")) if os.getenv("DISCORD_GUILD_ID") else None
     )
+    PNL_CHANNEL_ID: Optional[int] = (
+        int(os.getenv("PNL_CHANNEL_ID")) if os.getenv("PNL_CHANNEL_ID") else 1546728305833672725
+    )
     RESERVOIR_API_KEY: str = os.getenv("RESERVOIR_API_KEY", "").strip()
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
