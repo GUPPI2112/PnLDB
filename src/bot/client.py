@@ -16,7 +16,6 @@ class NFTPnLBot(commands.Bot):
 
     def __init__(self):
         intents = discord.Intents.default()
-        intents.message_content = True
         super().__init__(
             command_prefix="!",
             intents=intents,
@@ -32,14 +31,17 @@ class NFTPnLBot(commands.Bot):
         self.tree.add_command(setup_command)
 
         # Sync application commands
-        if config.DISCORD_GUILD_ID:
-            guild_obj = discord.Object(id=config.DISCORD_GUILD_ID)
-            self.tree.copy_global_to(guild=guild_obj)
-            synced = await self.tree.sync(guild=guild_obj)
-            logger.info("Synced %d guild slash command(s) to guild %s", len(synced), config.DISCORD_GUILD_ID)
-        else:
-            synced = await self.tree.sync()
-            logger.info("Synced %d global slash command(s)", len(synced))
+        try:
+            if config.DISCORD_GUILD_ID:
+                guild_obj = discord.Object(id=config.DISCORD_GUILD_ID)
+                self.tree.copy_global_to(guild=guild_obj)
+                synced = await self.tree.sync(guild=guild_obj)
+                logger.info("Synced %d guild slash command(s) to guild %s", len(synced), config.DISCORD_GUILD_ID)
+            else:
+                synced = await self.tree.sync()
+                logger.info("Synced %d global slash command(s)", len(synced))
+        except Exception as e:
+            logger.warning("Error syncing slash commands: %s", e)
 
     async def on_ready(self):
         logger.info("Logged in as %s (ID: %s)", self.user, self.user.id if self.user else "Unknown")
