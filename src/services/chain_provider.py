@@ -44,6 +44,33 @@ CHAIN_API_MAP: Dict[str, List[str]] = {
     "apechain": [
         "https://apechain.calderaexplorer.xyz/api",
     ],
+    "linea": [
+        "https://linea.blockscout.com/api",
+    ],
+    "scroll": [
+        "https://scroll.blockscout.com/api",
+    ],
+    "avalanche": [
+        "https://snowtrace.io/api",
+    ],
+    "bsc": [
+        "https://api.bscscan.com/api",
+    ],
+    "sonic": [
+        "https://sonicscan.org/api",
+    ],
+    "berachain": [
+        "https://berascan.com/api",
+    ],
+    "monad": [
+        "https://monadexplorer.com/api",
+    ],
+    "sei": [
+        "https://seitrace.com/api",
+    ],
+    "abstract": [
+        "https://abscan.org/api",
+    ],
 }
 
 COINGECKO_MAP: Dict[str, str] = {
@@ -55,10 +82,19 @@ COINGECKO_MAP: Dict[str, str] = {
     "blast": "ethereum",
     "zora": "ethereum",
     "robinhood": "ethereum",
+    "linea": "ethereum",
+    "scroll": "ethereum",
+    "abstract": "ethereum",
     "polygon": "matic-network",
     "solana": "solana",
     "bitcoin": "bitcoin",
     "apechain": "apecoin",
+    "avalanche": "avalanche-2",
+    "bsc": "binancecoin",
+    "sonic": "fantom",
+    "berachain": "berachain-bera",
+    "monad": "monad",
+    "sei": "sei-network",
 }
 
 
@@ -77,6 +113,8 @@ BLOCKSCOUT_DOMAINS: Dict[str, str] = {
     "op": "optimism.blockscout.com",
     "blast": "blast.blockscout.com",
     "zora": "zora.blockscout.com",
+    "linea": "linea.blockscout.com",
+    "scroll": "scroll.blockscout.com",
 }
 
 
@@ -96,6 +134,12 @@ OPENSEA_CHAIN_MAP: Dict[str, str] = {
     "blast": "blast",
     "zora": "zora",
     "apechain": "apechain",
+    "avalanche": "avalanche",
+    "bsc": "bsc",
+    "linea": "linea",
+    "scroll": "scroll",
+    "sei": "sei",
+    "abstract": "abstract",
 }
 
 
@@ -109,6 +153,15 @@ RPC_MAP: Dict[str, List[str]] = {
     "blast": ["https://rpc.blast.io"],
     "zora": ["https://rpc.zora.energy"],
     "apechain": ["https://rpc.apechain.com"],
+    "linea": ["https://rpc.linea.build"],
+    "scroll": ["https://rpc.scroll.io"],
+    "avalanche": ["https://api.avax.network/ext/bc/C/rpc"],
+    "bsc": ["https://binance.llamarpc.com", "https://rpc.ankr.com/bsc"],
+    "sonic": ["https://rpc.soniclabs.com"],
+    "berachain": ["https://rpc.berachain.com"],
+    "monad": ["https://rpc.monad.xyz"],
+    "sei": ["https://evm-rpc.sei-apis.com"],
+    "abstract": ["https://api.mainnet.abs.xyz"],
 }
 
 

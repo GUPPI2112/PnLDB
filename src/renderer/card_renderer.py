@@ -300,8 +300,6 @@ async def render_pnl_card(
     avatar_raw = None
     if pnl.user_avatar_url:
         avatar_raw = await download_image(pnl.user_avatar_url)
-    elif collection.image_url:
-        avatar_raw = await download_image(collection.image_url)
 
     first_letter = (clean_username[:1] if clean_username else "U").upper()
     avatar = make_squircle_avatar(avatar_raw, size=52, radius=14, fallback_letter=first_letter)
