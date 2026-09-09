@@ -180,12 +180,15 @@ class MultiChainProvider(NFTDataProvider):
     """
     Robust Multi-chain NFT data provider supporting ERC-721 and ERC-1155,
     exact mint & sale prices from tx values, internal transactions, WETH transfers,
-    OpenSea collection metadata & avatars, onchain RPC contract inspection,
+    OpenSea collection metadata & banners, onchain RPC contract inspection,
     and real-time floor prices across all chains.
     """
 
     def __init__(self):
         self._session: Optional[aiohttp.ClientSession] = None
+        self._contract_name_cache: Dict[str, str] = {}
+        self._contract_image_cache: Dict[str, str] = {}
+        self._contract_floor_cache: Dict[str, float] = {}
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -234,7 +237,7 @@ class MultiChainProvider(NFTDataProvider):
     ) -> Tuple[str, str, Optional[str], Optional[str], float]:
         """
         Resolves any user input (OpenSea collection URL, asset URL, collection slug, or contract address)
-        into: (contract_address, chain, collection_name, avatar_image_url, floor_price).
+        into: (contract_address, chain, collection_name, banner_image_url, floor_price).
         """
         raw = input_str.strip()
         chain = default_chain.lower()
@@ -296,8 +299,8 @@ class MultiChainProvider(NFTDataProvider):
 
     async def _fetch_opensea_collection_by_slug(self, slug: str) -> Optional[dict]:
         """
-        Scrapes an OpenSea collection page by slug (e.g. 'the-oil-rigs') to extract:
-        name, avatar logo, floor price, active chain, and primary smart contract address.
+        Scrapes an OpenSea collection page by slug (e.g. 'the-oil-rigs', 'pudgypenguins') to extract:
+        name, official high-res banner image, floor price, active chain, and primary smart contract address.
         """
         url = f"https://opensea.io/collection/{slug}"
         session = await self._get_session()
@@ -321,8 +324,30 @@ class MultiChainProvider(NFTDataProvider):
                     clean_name = re.sub(r'(\s+[\d\.]+\s+[A-Za-z]+)?\s*-\s*Collection\s*\|\s*OpenSea.*', '', title, flags=re.I).strip()
                     clean_name = re.sub(r'\s*\|\s*OpenSea.*', '', clean_name, flags=re.I).strip()
 
-                    # 2. Schema.org JSON metadata
+                    # 2. Extract Official OpenSea Collection Banner Artwork (Prioritizes banner/hero over small profile/logo)
                     image_url = None
+
+                    # A. Banner / Hero Desktop matches
+                    banner_matches = re.findall(
+                        r'https://[^\s\"\'<>]*(?:banner|image_type_hero_desktop|image_type_hero|image_type_banner|image_type_header)[^\s\"\'<>]*',
+                        html,
+                        re.I,
+                    )
+                    clean_banners = [
+                        b.replace("&amp;", "&").rstrip('\\\"\'')
+                        for b in banner_matches
+                        if not b.lower().endswith(".svg") and "currency_logos" not in b and "shell-ape" not in b
+                    ]
+                    if clean_banners:
+                        image_url = clean_banners[0]
+
+                    # B. OpenGraph dynamic collection banner
+                    if not image_url:
+                        og_img = re.search(r'<meta\s+(?:property|name)=[\"\']og:image[\"\']\s+content=[\"\']([^\"\']+)[\"\']', html, re.I)
+                        if og_img and ("opengraph-image" in og_img.group(1) or "seadn.io" in og_img.group(1)):
+                            image_url = og_img.group(1).replace("&amp;", "&").rstrip('\\\"\'')
+
+                    # C. Schema.org JSON metadata
                     schema_m = re.search(r'<script\s+type=[\"\']application/ld\+json[\"\'][^>]*>(.*?)</script>', html, re.DOTALL)
                     if schema_m:
                         try:
@@ -330,29 +355,28 @@ class MultiChainProvider(NFTDataProvider):
                             s_data = json.loads(schema_m.group(1))
                             if s_data.get("name") and not s_data["name"].lower().startswith("opensea"):
                                 clean_name = s_data["name"]
-                            if s_data.get("image"):
-                                image_url = s_data["image"]
+                            if not image_url:
+                                if s_data.get("banner"):
+                                    image_url = s_data["banner"]
+                                elif s_data.get("image"):
+                                    image_url = s_data["image"]
                         except Exception:
                             pass
 
-                    # 3. Logo Image fallback
+                    # D. Fallback only if no banner is present
                     if not image_url:
                         imgs = re.findall(r'<img[^>]+src=[\"\']([^\"\']*(?:image_type_logo|image_type_avatar|h=250|/image/)[^\"\']*)[\"\']', html)
-                        if imgs:
-                            image_url = imgs[0].replace("&amp;", "&").split("?")[0]
+                        clean_imgs = [i.replace("&amp;", "&").split("?")[0] for i in imgs if not i.endswith(".svg") and "currency_logos" not in i]
+                        if clean_imgs:
+                            image_url = clean_imgs[0]
 
-                    if not image_url:
-                        og_img = re.search(r'<meta\s+property=[\"\']og:image[\"\']\s+content=[\"\']([^\"\']+)[\"\']', html, re.I)
-                        if og_img and ("opengraph-image" in og_img.group(1) or "seadn.io" in og_img.group(1)):
-                            image_url = og_img.group(1)
-
-                    # 4. Chain detection
+                    # 3. Chain detection
                     chain = "ethereum"
                     chain_m = re.search(r'\"chain\":\{\"identifier\":\s*\"([a-zA-Z0-9_\-]+)\"', html)
                     if chain_m:
                         chain = chain_m.group(1).lower()
 
-                    # 5. Extract contract address matching chain
+                    # 4. Extract contract address matching chain
                     from collections import Counter
                     item_links = re.findall(r'/(?:item/|assets/)?([a-zA-Z0-9_\-]+)/(0x[a-fA-F0-9]{40})', html)
                     chain_contracts = [
@@ -382,7 +406,7 @@ class MultiChainProvider(NFTDataProvider):
         self, contract: str, chain: str
     ) -> Tuple[Optional[str], Optional[str], float]:
         """
-        Fetches official collection name, avatar image, and floor price from OpenSea.
+        Fetches official collection name, banner image, and floor price from OpenSea.
         """
         chain_slug = OPENSEA_CHAIN_MAP.get(chain.lower(), "ethereum")
         session = await self._get_session()
@@ -407,7 +431,6 @@ class MultiChainProvider(NFTDataProvider):
                         if title_match:
                             raw_title = title_match.group(1)
 
-                            # Extract floor price if present: e.g. '0.0026 ETH'
                             floor_match = re.search(r'([\d\.]+)\s+(?:ETH|MATIC|POL|WETH|SOL|APE)', raw_title, re.I)
                             if floor_match:
                                 try:
@@ -422,30 +445,47 @@ class MultiChainProvider(NFTDataProvider):
                             if clean and not clean.lower().startswith('opensea') and not clean.startswith('0x'):
                                 name = clean
 
-                        # 2. Schema.org JSON
-                        schema_m = re.search(r'<script\s+type=[\"\']application/ld\+json[\"\'][^>]*>(.*?)</script>', html, re.DOTALL)
+                        # 2. Extract Banner Image (prioritizes banner / hero)
                         image_url = None
+                        banner_matches = re.findall(
+                            r'https://[^\s\"\'<>]*(?:banner|image_type_hero_desktop|image_type_hero|image_type_banner|image_type_header)[^\s\"\'<>]*',
+                            html,
+                            re.I,
+                        )
+                        clean_banners = [
+                            b.replace("&amp;", "&").rstrip('\\\"\'')
+                            for b in banner_matches
+                            if not b.lower().endswith(".svg") and "currency_logos" not in b and "shell-ape" not in b
+                        ]
+                        if clean_banners:
+                            image_url = clean_banners[0]
+
+                        # Schema.org JSON
+                        schema_m = re.search(r'<script\s+type=[\"\']application/ld\+json[\"\'][^>]*>(.*?)</script>', html, re.DOTALL)
                         if schema_m:
                             try:
                                 import json
                                 s_data = json.loads(schema_m.group(1))
                                 if s_data.get("name") and not s_data["name"].lower().startswith("opensea"):
                                     name = s_data["name"]
-                                if s_data.get("image"):
-                                    image_url = s_data["image"]
+                                if not image_url:
+                                    if s_data.get("banner"):
+                                        image_url = s_data["banner"]
+                                    elif s_data.get("image"):
+                                        image_url = s_data["image"]
                             except Exception:
                                 pass
 
-                        # 3. Extract collection avatar / logo image
                         if not image_url:
-                            imgs = re.findall(r'<img[^>]+src=[\"\']([^\"\']*(?:image_type_logo|image_type_avatar|h=250|/image/)[^\"\']*)[\"\']', html)
-                            if imgs:
-                                image_url = imgs[0].replace('&amp;', '&').split('?')[0]
+                            og_img = re.search(r'<meta\s+(?:property|name)=[\"\']og:image[\"\']\s+content=[\"\']([^\"\']+)[\"\']', html, re.I)
+                            if og_img and ('opengraph-image' in og_img.group(1) or 'seadn.io' in og_img.group(1)):
+                                image_url = og_img.group(1).replace("&amp;", "&").rstrip('\\\"\'')
 
                         if not image_url:
-                            og_img = re.search(r'<meta\s+property=[\"\']og:image[\"\']\s+content=[\"\']([^\"\']+)[\"\']', html, re.I)
-                            if og_img and ('opengraph-image' in og_img.group(1) or 'seadn.io' in og_img.group(1)):
-                                image_url = og_img.group(1)
+                            imgs = re.findall(r'<img[^>]+src=[\"\']([^\"\']*(?:image_type_logo|image_type_avatar|h=250|/image/)[^\"\']*)[\"\']', html)
+                            clean_imgs = [i.replace("&amp;", "&").split("?")[0] for i in imgs if not i.endswith(".svg") and "currency_logos" not in i]
+                            if clean_imgs:
+                                image_url = clean_imgs[0]
 
                         if name or image_url:
                             return name, image_url, floor_price
@@ -466,12 +506,16 @@ class MultiChainProvider(NFTDataProvider):
         if norm_contract.startswith("0x") and len(norm_contract) == 42:
             display_name = f"NFT ({norm_contract[:6]}...{norm_contract[-4:]})"
 
-        image_url = None
-        floor_price = 0.0
+        # Check local cache first
+        if norm_contract in self._contract_name_cache:
+            display_name = self._contract_name_cache[norm_contract]
+        image_url = self._contract_image_cache.get(norm_contract)
+        floor_price = self._contract_floor_cache.get(norm_contract, 0.0)
+
         session = await self._get_session()
 
         if norm_contract.startswith("0x") and len(norm_contract) == 42:
-            # 1. Primary: Try OpenSea collection & avatar resolution
+            # 1. Primary: Try OpenSea collection & banner resolution
             os_name, os_img, os_floor = await self._fetch_opensea_metadata(norm_contract, chain)
             if os_name:
                 display_name = os_name
@@ -506,7 +550,6 @@ class MultiChainProvider(NFTDataProvider):
                             if items:
                                 if display_name.startswith("NFT (0x") and items[0].get("metadata", {}).get("name"):
                                     item_nm = items[0]["metadata"]["name"]
-                                    # Strip '#...' from item name
                                     clean_item_nm = re.sub(r'\s*#\d+.*', '', item_nm).strip()
                                     if clean_item_nm:
                                         display_name = clean_item_nm
@@ -523,7 +566,6 @@ class MultiChainProvider(NFTDataProvider):
             if display_name.startswith("NFT (0x") or not image_url:
                 rpcs = RPC_MAP.get(chain.lower(), ["https://eth.llamarpc.com"])
                 for rpc in rpcs:
-                    # Query onchain name()
                     if display_name.startswith("NFT (0x"):
                         try:
                             payload = {
@@ -541,7 +583,6 @@ class MultiChainProvider(NFTDataProvider):
                         except Exception:
                             pass
 
-                    # Query onchain tokenURI()
                     if not image_url:
                         for tid in [1, 0, 2]:
                             try:
@@ -575,7 +616,30 @@ class MultiChainProvider(NFTDataProvider):
                         if image_url:
                             break
 
-        # 5. If user entered a collection name directly, preserve it
+            # 5. Smart OpenSea Slug Probe from Clean Collection Name
+            if display_name and not display_name.startswith("NFT (0x") and (not image_url or floor_price <= 0):
+                slug_candidates = [
+                    re.sub(r'[^a-zA-Z0-9]+', '-', display_name).lower().strip('-'),
+                    re.sub(r'[^a-zA-Z0-9]+', '', display_name).lower(),
+                ]
+                for sc in slug_candidates:
+                    sinfo = await self._fetch_opensea_collection_by_slug(sc)
+                    if sinfo and sinfo.get("name"):
+                        display_name = sinfo["name"]
+                        if sinfo.get("image_url"):
+                            image_url = sinfo["image_url"]
+                        if sinfo.get("floor_price", 0.0) > 0 and floor_price <= 0:
+                            floor_price = sinfo["floor_price"]
+                        break
+
+            # Cache the discovered values
+            self._contract_name_cache[norm_contract] = display_name
+            if image_url:
+                self._contract_image_cache[norm_contract] = image_url
+            if floor_price > 0:
+                self._contract_floor_cache[norm_contract] = floor_price
+
+        # 6. If user entered a collection name directly, preserve it
         if not norm_contract.startswith("0x"):
             display_name = norm_contract
 
@@ -690,7 +754,11 @@ class MultiChainProvider(NFTDataProvider):
 
         for item in raw_transfers:
             c_addr = str(item.get("contractAddress", "")).lower()
-            t_name = str(item.get("tokenName", "")).lower()
+            t_name_raw = str(item.get("tokenName", "")).strip()
+            if c_addr and t_name_raw and not t_name_raw.startswith("0x"):
+                self._contract_name_cache[c_addr] = t_name_raw
+
+            t_name = t_name_raw.lower()
             t_sym = str(item.get("tokenSymbol", "")).lower()
 
             if is_exact_contract:
