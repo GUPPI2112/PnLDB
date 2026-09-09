@@ -1,6 +1,7 @@
 import io
 import logging
 import re
+import unicodedata
 from pathlib import Path
 from typing import Optional, Tuple
 import aiohttp
@@ -12,17 +13,51 @@ logger = logging.getLogger(__name__)
 
 FONTS_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "fonts"
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "templates"
+IMAGES_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "images"
+
+SMALL_CAPS_MAP = {
+    "ᴀ": "A", "ʙ": "B", "ᴄ": "C", "ᴅ": "D", "ᴇ": "E", "ꜰ": "F", "ɢ": "G",
+    "ʜ": "H", "ɪ": "I", "ᴊ": "J", "ᴋ": "K", "ʟ": "L", "ᴍ": "M", "ɴ": "N",
+    "ᴏ": "O", "ᴘ": "P", "ǫ": "Q", "ʀ": "R", "ꜱ": "S", "ᴛ": "T", "ᴜ": "U",
+    "ᴠ": "V", "ᴡ": "W", "ʏ": "Y", "ᴢ": "Z",
+    "ᴁ": "AE", "ᴃ": "B", "ᴆ": "D", "ᴈ": "E", "ᴉ": "I", "ᴊ": "J", "ᴋ": "K",
+    "ᴌ": "L", "ᴍ": "M", "ᴎ": "N", "ᴏ": "O", "ᴐ": "O", "ᴑ": "O", "ᴒ": "O",
+    "ᴓ": "O", "ᴔ": "OE", "ᴕ": "OU", "ᴖ": "U", "ᴗ": "U", "ᴘ": "P", "ᴙ": "R",
+    "ᴚ": "R", "ᴛ": "T", "ᴜ": "U", "ᴝ": "U", "ᴞ": "U", "ᴟ": "M", "ᴠ": "V",
+    "ᴡ": "W", "ᴢ": "Z"
+}
 
 
 def clean_text(text: Optional[str], fallback: str = "User") -> str:
-    """Strips emojis only, ensuring clean typography while preserving letters, numbers, and symbols."""
+    """
+    Normalizes styled mathematical / unicode fonts (Fraktur, Script, Bold, Small Caps, Fullwidth)
+    to clean standard characters and strips emoji blocks for perfect Space Grotesk rendering.
+    """
     if not text:
         return fallback
-    emoji_regex = re.compile(
-        "[\U00010000-\U0010ffff\U00002600-\U000027bf\U0001f300-\U0001f64f\U0001f680-\U0001f6ff\U00002702-\U000027b0\U000024c2-\U0001f251]",
+
+    # 1. Map small caps characters
+    mapped = "".join(SMALL_CAPS_MAP.get(ch, ch) for ch in text)
+
+    # 2. Decompose all mathematical / styled Unicode fonts to base Latin
+    normalized = unicodedata.normalize("NFKD", mapped)
+
+    # 3. Strip emoji blocks while keeping clean standard symbols and letters
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # misc symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map
+        "\U0001F1E0-\U0001F1FF"  # flags / regional indicators
+        "\U0001F900-\U0001F9FF"  # supplemental symbols
+        "\U0001FA00-\U0001FAFF"  # symbols extended
+        "\U00002702-\U000027B0"  # dingbats
+        "\U000024C2-\U0001F251"  # enclosed
+        "\U00002600-\U000026FF"  # misc symbols
+        "]+",
         flags=re.UNICODE,
     )
-    cleaned = emoji_regex.sub("", text).strip()
+    cleaned = emoji_pattern.sub("", normalized)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned if cleaned else (text.strip() or fallback)
 
@@ -360,12 +395,40 @@ async def render_pnl_card(
         val_w = (val_bbox[2] - val_bbox[0]) if val_bbox else 40
         draw_eth_diamond(draw, c["x"] + val_w + 10, stat_y + 44, size=14, color=white)
 
-    # --- 4. FOOTER ---
-    font_footer = get_space_grotesk(13, weight="medium")
-    footer_text = "https://discord.gg/OBSIDIAN"
-    foot_bbox = font_footer.getbbox(footer_text)
-    foot_w = (foot_bbox[2] - foot_bbox[0]) if foot_bbox else 180
-    draw.text((972 - foot_w, 532), footer_text, fill=(130, 140, 155), font=font_footer)
+    # --- 4. FOOTER (80px QR Code Badge in Bottom Right Corner) ---
+    qr_path = IMAGES_DIR / "obsidian_qr.png"
+    if qr_path.exists():
+        try:
+            qr_size = 80
+            qr_radius = 15
+            qr_x = 918
+            qr_y = 478
+
+            raw_qr = Image.open(qr_path).convert("RGBA")
+            qr_mask = Image.new("L", (qr_size, qr_size), 0)
+            qr_mask_draw = ImageDraw.Draw(qr_mask)
+            qr_mask_draw.rounded_rectangle([0, 0, qr_size, qr_size], radius=qr_radius, fill=255)
+
+            resized_qr = raw_qr.resize((qr_size, qr_size), Image.Resampling.LANCZOS)
+            qr_badge = Image.new("RGBA", (qr_size, qr_size), (0, 0, 0, 0))
+            qr_badge.paste(resized_qr, (0, 0), mask=qr_mask)
+
+            qr_border = ImageDraw.Draw(qr_badge)
+            qr_border.rounded_rectangle(
+                [0, 0, qr_size - 1, qr_size - 1],
+                radius=qr_radius,
+                outline=(80, 90, 110, 180),
+                width=1,
+            )
+            base_card.paste(qr_badge, (qr_x, qr_y), mask=qr_badge)
+        except Exception as e:
+            logger.warning("Error rendering QR code footer: %s", e)
+    else:
+        font_footer = get_space_grotesk(13, weight="medium")
+        footer_text = "https://discord.gg/OBSIDIAN"
+        foot_bbox = font_footer.getbbox(footer_text)
+        foot_w = (foot_bbox[2] - foot_bbox[0]) if foot_bbox else 180
+        draw.text((972 - foot_w, 532), footer_text, fill=(130, 140, 155), font=font_footer)
 
     buffer = io.BytesIO()
     base_card.convert("RGB").save(buffer, format="PNG", quality=95)
