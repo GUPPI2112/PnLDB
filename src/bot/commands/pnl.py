@@ -71,19 +71,37 @@ async def execute_pnl_check(
     # 2. Fetch data via MultiChainProvider
     provider = MultiChainProvider()
     try:
-        resolved_chain_cfg = chain_cfg
-        collection_meta = await provider.get_collection_metadata(contract, resolved_chain_cfg.name)
-        activities = await provider.get_user_activity(wallet, contract, resolved_chain_cfg.name)
+        resolved_chain_name = chain_cfg.name
+        
+        # Step A: Resolve OpenSea URL / slug / contract into actual contract & collection metadata
+        res_contract, res_chain, res_name, res_img, res_floor = await provider.resolve_nft_target(
+            contract, default_chain=resolved_chain_name
+        )
+        target_contract = res_contract
+        resolved_chain_name = res_chain
+        resolved_chain_cfg = config.get_chain_config(resolved_chain_name) or chain_cfg
 
-        # Cross-Chain Auto-Detection: If 0 activities on requested chain, scan other EVM chains concurrently
-        if not activities and contract.startswith("0x") and len(contract) == 42:
-            candidate_chains = ["base", "arbitrum", "ethereum", "polygon", "optimism", "blast", "zora", "apechain"]
-            targets = [c for c in candidate_chains if c != chain_cfg.name and config.get_chain_config(c)]
+        # Step B: Get collection metadata
+        collection_meta = await provider.get_collection_metadata(target_contract, resolved_chain_cfg.name)
+        if res_name and (collection_meta.name.startswith("NFT (0x") or collection_meta.name.startswith("http")):
+            collection_meta.name = res_name
+        if res_img and not collection_meta.image_url:
+            collection_meta.image_url = res_img
+        if res_floor > 0 and collection_meta.floor_price_native <= 0:
+            collection_meta.floor_price_native = res_floor
+
+        # Step C: Get user activity
+        activities = await provider.get_user_activity(wallet, target_contract, resolved_chain_cfg.name)
+
+        # Cross-Chain Auto-Detection: If 0 activities on resolved chain, scan other EVM chains concurrently
+        if not activities and target_contract.startswith("0x") and len(target_contract) == 42:
+            candidate_chains = ["robinhood", "base", "ethereum", "arbitrum", "polygon", "optimism", "blast", "zora", "apechain"]
+            targets = [c for c in candidate_chains if c != resolved_chain_cfg.name and config.get_chain_config(c)]
 
             async def probe_chain(c_name: str):
                 try:
-                    c_acts = await provider.get_user_activity(wallet, contract, c_name)
-                    c_meta = await provider.get_collection_metadata(contract, c_name)
+                    c_acts = await provider.get_user_activity(wallet, target_contract, c_name)
+                    c_meta = await provider.get_collection_metadata(target_contract, c_name)
                     return c_name, c_acts, c_meta
                 except Exception:
                     return c_name, [], None
@@ -93,9 +111,9 @@ async def execute_pnl_check(
                 if c_acts:
                     activities = c_acts
                     resolved_chain_cfg = config.get_chain_config(c_name) or resolved_chain_cfg
-                    if c_meta:
+                    if c_meta and not c_meta.name.startswith("NFT (0x"):
                         collection_meta = c_meta
-                    logger.info("Auto-detected active chain %s with %d activities for contract %s", c_name, len(c_acts), contract)
+                    logger.info("Auto-detected active chain %s with %d activities for contract %s", c_name, len(c_acts), target_contract)
                     break
                 elif collection_meta.name.startswith("NFT (0x") and c_meta and not c_meta.name.startswith("NFT (0x"):
                     resolved_chain_cfg = config.get_chain_config(c_name) or resolved_chain_cfg
@@ -105,7 +123,7 @@ async def execute_pnl_check(
         pnl_result = calculate_nft_pnl(
             events=activities,
             wallet_address=wallet,
-            contract_address=contract,
+            contract_address=target_contract,
             chain=resolved_chain_cfg.name,
             currency_symbol=resolved_chain_cfg.currency_symbol,
             floor_price_native=collection_meta.floor_price_native,

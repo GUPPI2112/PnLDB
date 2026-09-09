@@ -23,7 +23,7 @@ CHAIN_API_MAP: Dict[str, List[str]] = {
         "https://api.routescan.io/v2/network/mainnet/evm/42161/etherscan/api",
     ],
     "robinhood": [
-        "https://arbitrum.blockscout.com/api",
+        "https://robinhoodchain.blockscout.com/api",
     ],
     "polygon": [
         "https://polygon.blockscout.com/api",
@@ -69,7 +69,7 @@ BLOCKSCOUT_DOMAINS: Dict[str, str] = {
     "base": "base.blockscout.com",
     "arbitrum": "arbitrum.blockscout.com",
     "arb": "arbitrum.blockscout.com",
-    "robinhood": "arbitrum.blockscout.com",
+    "robinhood": "robinhoodchain.blockscout.com",
     "polygon": "polygon.blockscout.com",
     "matic": "polygon.blockscout.com",
     "pol": "polygon.blockscout.com",
@@ -87,7 +87,7 @@ OPENSEA_CHAIN_MAP: Dict[str, str] = {
     "base": "base",
     "arbitrum": "arbitrum",
     "arb": "arbitrum",
-    "robinhood": "arbitrum",
+    "robinhood": "robinhood",
     "polygon": "matic",
     "matic": "matic",
     "pol": "matic",
@@ -103,6 +103,7 @@ RPC_MAP: Dict[str, List[str]] = {
     "ethereum": ["https://eth.llamarpc.com", "https://rpc.ankr.com/eth"],
     "base": ["https://mainnet.base.org", "https://rpc.ankr.com/base"],
     "arbitrum": ["https://arb1.arbitrum.io/rpc", "https://rpc.ankr.com/arbitrum"],
+    "robinhood": ["https://rpc.mainnet.chain.robinhood.com"],
     "polygon": ["https://polygon-rpc.com", "https://rpc.ankr.com/polygon"],
     "optimism": ["https://mainnet.optimism.io", "https://rpc.ankr.com/optimism"],
     "blast": ["https://rpc.blast.io"],
@@ -175,6 +176,155 @@ class MultiChainProvider(NFTDataProvider):
         }
         return fallbacks.get(coin_id, 2500.0)
 
+    async def resolve_nft_target(
+        self, input_str: str, default_chain: str = "ethereum"
+    ) -> Tuple[str, str, Optional[str], Optional[str], float]:
+        """
+        Resolves any user input (OpenSea collection URL, asset URL, collection slug, or contract address)
+        into: (contract_address, chain, collection_name, avatar_image_url, floor_price).
+        """
+        raw = input_str.strip()
+        chain = default_chain.lower()
+        if chain in ("auto", "", "none"):
+            chain = "ethereum"
+
+        # 1. OpenSea Asset URL: https://opensea.io/assets/{chain}/{contract} or /item/{chain}/{contract}/{token_id}
+        asset_m = re.search(r'opensea\.io/(?:assets|item)/([a-zA-Z0-9_\-]+)/(0x[a-fA-F0-9]{40})', raw, re.I)
+        if asset_m:
+            chain = asset_m.group(1).lower()
+            contract = asset_m.group(2).lower()
+            os_name, os_img, os_floor = await self._fetch_opensea_metadata(contract, chain)
+            return contract, chain, os_name, os_img, os_floor
+
+        # 2. OpenSea Collection URL or slug: e.g. https://opensea.io/collection/the-oil-rigs or the-oil-rigs
+        is_slug_candidate = (
+            "opensea.io/collection/" in raw
+            or (not raw.startswith("0x") and not raw.startswith(("bc1", "1", "3")) and len(raw) < 50 and " " not in raw)
+        )
+
+        if is_slug_candidate:
+            slug = raw
+            if "opensea.io/collection/" in slug:
+                sm = re.search(r'opensea\.io/collection/([a-zA-Z0-9_\-]+)', slug, re.I)
+                if sm:
+                    slug = sm.group(1)
+            
+            slug_info = await self._fetch_opensea_collection_by_slug(slug)
+            if slug_info and slug_info.get("contract_address"):
+                return (
+                    slug_info["contract_address"],
+                    slug_info.get("chain", chain),
+                    slug_info.get("name"),
+                    slug_info.get("image_url"),
+                    slug_info.get("floor_price", 0.0),
+                )
+            elif slug_info and slug_info.get("name"):
+                return (
+                    raw,
+                    slug_info.get("chain", chain),
+                    slug_info.get("name"),
+                    slug_info.get("image_url"),
+                    slug_info.get("floor_price", 0.0),
+                )
+
+        # 3. Direct Hex Address: 0x...
+        if raw.startswith("0x") and len(raw) == 42:
+            contract = raw.lower()
+            # Try OpenSea metadata with current chain and common chains
+            candidate_chains = [chain] + [c for c in ["robinhood", "base", "ethereum", "arbitrum", "polygon", "optimism"] if c != chain]
+            for c_probe in candidate_chains:
+                os_name, os_img, os_floor = await self._fetch_opensea_metadata(contract, c_probe)
+                if os_name and not os_name.startswith("NFT (0x"):
+                    return contract, c_probe, os_name, os_img, os_floor
+
+            return contract, chain, None, None, 0.0
+
+        return raw, chain, None, None, 0.0
+
+    async def _fetch_opensea_collection_by_slug(self, slug: str) -> Optional[dict]:
+        """
+        Scrapes an OpenSea collection page by slug (e.g. 'the-oil-rigs') to extract:
+        name, avatar logo, floor price, active chain, and primary smart contract address.
+        """
+        url = f"https://opensea.io/collection/{slug}"
+        session = await self._get_session()
+        try:
+            async with session.get(url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=6)) as resp:
+                if resp.status == 200:
+                    html = await resp.text()
+
+                    # 1. Title & Floor price: e.g. '<title>The Oil Rigs 0.0026 ETH - Collection | OpenSea</title>'
+                    title_m = re.search(r'<title>([^<]+)</title>', html)
+                    title = title_m.group(1) if title_m else ""
+
+                    floor_price = 0.0
+                    floor_m = re.search(r'([\d\.]+)\s+(?:ETH|MATIC|POL|WETH|SOL|APE)', title, re.I)
+                    if floor_m:
+                        try:
+                            floor_price = float(floor_m.group(1))
+                        except Exception:
+                            pass
+
+                    clean_name = re.sub(r'(\s+[\d\.]+\s+[A-Za-z]+)?\s*-\s*Collection\s*\|\s*OpenSea.*', '', title, flags=re.I).strip()
+                    clean_name = re.sub(r'\s*\|\s*OpenSea.*', '', clean_name, flags=re.I).strip()
+
+                    # 2. Schema.org JSON metadata
+                    image_url = None
+                    schema_m = re.search(r'<script\s+type=[\"\']application/ld\+json[\"\'][^>]*>(.*?)</script>', html, re.DOTALL)
+                    if schema_m:
+                        try:
+                            import json
+                            s_data = json.loads(schema_m.group(1))
+                            if s_data.get("name") and not s_data["name"].lower().startswith("opensea"):
+                                clean_name = s_data["name"]
+                            if s_data.get("image"):
+                                image_url = s_data["image"]
+                        except Exception:
+                            pass
+
+                    # 3. Logo Image fallback
+                    if not image_url:
+                        imgs = re.findall(r'<img[^>]+src=[\"\']([^\"\']*(?:image_type_logo|image_type_avatar|h=250|/image/)[^\"\']*)[\"\']', html)
+                        if imgs:
+                            image_url = imgs[0].replace("&amp;", "&").split("?")[0]
+
+                    if not image_url:
+                        og_img = re.search(r'<meta\s+property=[\"\']og:image[\"\']\s+content=[\"\']([^\"\']+)[\"\']', html, re.I)
+                        if og_img and ("opengraph-image" in og_img.group(1) or "seadn.io" in og_img.group(1)):
+                            image_url = og_img.group(1)
+
+                    # 4. Chain detection
+                    chain = "ethereum"
+                    chain_m = re.search(r'\"chain\":\{\"identifier\":\s*\"([a-zA-Z0-9_\-]+)\"', html)
+                    if chain_m:
+                        chain = chain_m.group(1).lower()
+
+                    # 5. Extract contract address matching chain
+                    from collections import Counter
+                    item_links = re.findall(r'/(?:item/|assets/)?([a-zA-Z0-9_\-]+)/(0x[a-fA-F0-9]{40})', html)
+                    chain_contracts = [
+                        addr.lower()
+                        for ch, addr in item_links
+                        if (ch.lower() == chain or chain == "ethereum")
+                        and addr.lower() != "0x0000000000000000000000000000000000000000"
+                    ]
+
+                    contract_addr = None
+                    if chain_contracts:
+                        contract_addr = Counter(chain_contracts).most_common(1)[0][0]
+
+                    return {
+                        "name": clean_name if clean_name and not clean_name.lower().startswith("opensea") else slug.replace("-", " ").title(),
+                        "image_url": image_url,
+                        "floor_price": floor_price,
+                        "chain": chain,
+                        "contract_address": contract_addr,
+                    }
+        except Exception as e:
+            logger.debug("OpenSea collection lookup error for slug %s: %s", slug, e)
+
+        return None
+
     async def _fetch_opensea_metadata(
         self, contract: str, chain: str
     ) -> Tuple[Optional[str], Optional[str], float]:
@@ -187,6 +337,7 @@ class MultiChainProvider(NFTDataProvider):
         urls = [
             f"https://opensea.io/assets/{chain_slug}/{contract}",
             f"https://opensea.io/item/{chain_slug}/{contract}/1",
+            f"https://opensea.io/collection/{contract}",
         ]
 
         for url in urls:
@@ -195,16 +346,16 @@ class MultiChainProvider(NFTDataProvider):
                     if resp.status == 200:
                         html = await resp.text()
 
-                        # 1. Extract collection title
-                        title_match = re.search(r'<meta\s+property=[\"\']og:title[\"\']\s+content=[\"\']([^\"\']+)[\"\']', html, re.I)
+                        # 1. Extract collection title & floor price
+                        title_match = re.search(r'<title>([^<]+)</title>', html)
                         name = None
                         floor_price = 0.0
 
                         if title_match:
                             raw_title = title_match.group(1)
 
-                            # Extract floor price if present: e.g. '0.0005 ETH'
-                            floor_match = re.search(r'([\d\.]+)\s+(?:ETH|MATIC|POL|WETH|SOL)', raw_title, re.I)
+                            # Extract floor price if present: e.g. '0.0026 ETH'
+                            floor_match = re.search(r'([\d\.]+)\s+(?:ETH|MATIC|POL|WETH|SOL|APE)', raw_title, re.I)
                             if floor_match:
                                 try:
                                     floor_price = float(floor_match.group(1))
@@ -218,11 +369,25 @@ class MultiChainProvider(NFTDataProvider):
                             if clean and not clean.lower().startswith('opensea') and not clean.startswith('0x'):
                                 name = clean
 
-                        # 2. Extract collection avatar / logo image
+                        # 2. Schema.org JSON
+                        schema_m = re.search(r'<script\s+type=[\"\']application/ld\+json[\"\'][^>]*>(.*?)</script>', html, re.DOTALL)
                         image_url = None
-                        imgs = re.findall(r'<img[^>]+src=[\"\']([^\"\']*(?:image_type_logo|image_type_avatar|h=250|/image/)[^\"\']*)[\"\']', html)
-                        if imgs:
-                            image_url = imgs[0].replace('&amp;', '&').split('?')[0]
+                        if schema_m:
+                            try:
+                                import json
+                                s_data = json.loads(schema_m.group(1))
+                                if s_data.get("name") and not s_data["name"].lower().startswith("opensea"):
+                                    name = s_data["name"]
+                                if s_data.get("image"):
+                                    image_url = s_data["image"]
+                            except Exception:
+                                pass
+
+                        # 3. Extract collection avatar / logo image
+                        if not image_url:
+                            imgs = re.findall(r'<img[^>]+src=[\"\']([^\"\']*(?:image_type_logo|image_type_avatar|h=250|/image/)[^\"\']*)[\"\']', html)
+                            if imgs:
+                                image_url = imgs[0].replace('&amp;', '&').split('?')[0]
 
                         if not image_url:
                             og_img = re.search(r'<meta\s+property=[\"\']og:image[\"\']\s+content=[\"\']([^\"\']+)[\"\']', html, re.I)
@@ -292,11 +457,12 @@ class MultiChainProvider(NFTDataProvider):
                                     clean_item_nm = re.sub(r'\s*#\d+.*', '', item_nm).strip()
                                     if clean_item_nm:
                                         display_name = clean_item_nm
-                                img = items[0].get("image_url") or items[0].get("metadata", {}).get("image")
-                                if img:
-                                    if img.startswith("ipfs://"):
-                                        img = "https://ipfs.io/ipfs/" + img[7:]
-                                    image_url = img
+                                if not image_url:
+                                    img = items[0].get("image_url") or items[0].get("metadata", {}).get("image")
+                                    if img:
+                                        if img.startswith("ipfs://"):
+                                            img = "https://ipfs.io/ipfs/" + img[7:]
+                                        image_url = img
                 except Exception as e:
                     logger.debug("Blockscout instance lookup error: %s", e)
 
@@ -378,42 +544,92 @@ class MultiChainProvider(NFTDataProvider):
 
         session = await self._get_session()
         raw_transfers: List[dict] = []
+        is_exact_contract = norm_contract.startswith("0x") and len(norm_contract) == 42
 
-        api_bases = CHAIN_API_MAP.get(chain.lower(), ["https://eth.blockscout.com/api"])
-        actions = ["tokennfttx", "token1155tx"]
+        # 1. Primary for exact contracts: Query Direct RPC eth_getLogs (Instant, 0 Cloudflare blocks)
+        rpcs = RPC_MAP.get(chain.lower(), [])
+        if is_exact_contract and rpcs:
+            topic_transfer = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+            pad_wallet = "0x000000000000000000000000" + norm_wallet[2:]
+            
+            p_in = {"jsonrpc": "2.0", "id": 1, "method": "eth_getLogs", "params": [{"address": norm_contract, "topics": [topic_transfer, None, pad_wallet], "fromBlock": "0x0"}]}
+            p_out = {"jsonrpc": "2.0", "id": 2, "method": "eth_getLogs", "params": [{"address": norm_contract, "topics": [topic_transfer, pad_wallet], "fromBlock": "0x0"}]}
 
-        for api_base in api_bases:
-            chain_transfers = []
-            seen_tokens = set()
+            for rpc in rpcs:
+                try:
+                    async with session.post(rpc, json=p_in, timeout=aiohttp.ClientTimeout(total=4)) as r1, \
+                               session.post(rpc, json=p_out, timeout=aiohttp.ClientTimeout(total=4)) as r2:
+                        if r1.status == 200 and r2.status == 200:
+                            d1 = (await r1.json()).get("result", [])
+                            d2 = (await r2.json()).get("result", [])
+                            if isinstance(d1, list) and isinstance(d2, list) and (d1 or d2):
+                                seen_rpc = set()
+                                for l in d1:
+                                    tid = int(l["topics"][3], 16) if len(l.get("topics", [])) >= 4 else 1
+                                    k = (l.get("transactionHash"), norm_contract, str(tid), "in")
+                                    if k not in seen_rpc:
+                                        seen_rpc.add(k)
+                                        raw_transfers.append({
+                                            "hash": l.get("transactionHash"),
+                                            "contractAddress": norm_contract,
+                                            "from": "0x" + l["topics"][1][-40:].lower() if len(l.get("topics", [])) >= 2 else "0x0",
+                                            "to": norm_wallet,
+                                            "tokenID": str(tid),
+                                            "timeStamp": 0,
+                                        })
+                                for l in d2:
+                                    tid = int(l["topics"][3], 16) if len(l.get("topics", [])) >= 4 else 1
+                                    k = (l.get("transactionHash"), norm_contract, str(tid), "out")
+                                    if k not in seen_rpc:
+                                        seen_rpc.add(k)
+                                        raw_transfers.append({
+                                            "hash": l.get("transactionHash"),
+                                            "contractAddress": norm_contract,
+                                            "from": norm_wallet,
+                                            "to": "0x" + l["topics"][2][-40:].lower() if len(l.get("topics", [])) >= 3 else "0x0",
+                                            "tokenID": str(tid),
+                                            "timeStamp": 0,
+                                        })
+                                break
+                except Exception as e:
+                    logger.debug("RPC log fetch error on %s: %s", rpc, e)
 
-            for act in actions:
-                # 1. Fetch wallet transfers
-                urls = [
-                    f"{api_base}?module=account&action={act}&address={norm_wallet}&page=1&offset=100&sort=desc",
-                ]
-                if norm_contract.startswith("0x") and len(norm_contract) == 42:
-                    urls.append(
-                        f"{api_base}?module=account&action={act}&address={norm_wallet}&contractaddress={norm_contract}&page=1&offset=100&sort=desc"
-                    )
+        # 2. Secondary: Blockscout / RouteScan APIs
+        if not raw_transfers:
+            api_bases = CHAIN_API_MAP.get(chain.lower(), ["https://eth.blockscout.com/api"])
+            actions = ["tokennfttx", "token1155tx"]
 
-                for u in urls:
-                    try:
-                        async with session.get(u, timeout=aiohttp.ClientTimeout(total=6)) as resp:
-                            if resp.status == 200:
-                                data = await resp.json()
-                                res = data.get("result")
-                                if isinstance(res, list):
-                                    for item in res:
-                                        key = (item.get("hash"), item.get("contractAddress", "").lower(), item.get("tokenID"))
-                                        if key not in seen_tokens:
-                                            seen_tokens.add(key)
-                                            chain_transfers.append(item)
-                    except Exception as e:
-                        logger.debug("Transfer fetch error from %s: %s", u, e)
+            for api_base in api_bases:
+                chain_transfers = []
+                seen_tokens = set()
 
-            if chain_transfers:
-                raw_transfers = chain_transfers
-                break
+                for act in actions:
+                    urls = [
+                        f"{api_base}?module=account&action={act}&address={norm_wallet}&page=1&offset=100&sort=desc",
+                    ]
+                    if is_exact_contract:
+                        urls.append(
+                            f"{api_base}?module=account&action={act}&address={norm_wallet}&contractaddress={norm_contract}&page=1&offset=100&sort=desc"
+                        )
+
+                    for u in urls:
+                        try:
+                            async with session.get(u, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                                if resp.status == 200:
+                                    data = await resp.json()
+                                    res = data.get("result")
+                                    if isinstance(res, list):
+                                        for item in res:
+                                            key = (item.get("hash"), item.get("contractAddress", "").lower(), item.get("tokenID"))
+                                            if key not in seen_tokens:
+                                                seen_tokens.add(key)
+                                                chain_transfers.append(item)
+                        except Exception as e:
+                            logger.debug("Transfer fetch error from %s: %s", u, e)
+
+                if chain_transfers:
+                    raw_transfers = chain_transfers
+                    break
 
         # Filter matching transfers
         matched_transfers: List[dict] = []
@@ -472,7 +688,7 @@ class MultiChainProvider(NFTDataProvider):
             if tx_hash in tx_price_cache:
                 total_tx_val = tx_price_cache[tx_hash]
             else:
-                total_tx_val = await self._fetch_tx_value_comprehensive(tx_hash, norm_wallet, chain)
+                total_tx_val = await self._fetch_tx_value_comprehensive(tx_hash, norm_wallet, chain, activity_type)
                 tx_price_cache[tx_hash] = total_tx_val
 
             count_in_tx = max(1, tx_item_count.get(tx_hash, 1))
@@ -492,14 +708,13 @@ class MultiChainProvider(NFTDataProvider):
 
         return events
 
-
     async def _fetch_tx_value_comprehensive(
-        self, tx_hash: str, user_wallet: str, chain: str
+        self, tx_hash: str, user_wallet: str, chain: str, act_type: Optional[ActivityType] = None
     ) -> float:
         """
         Calculates exact ETH / native value of a mint, buy, or sale transaction:
-        1. Checks main tx value (eth_getTransactionByHash)
-        2. Checks internal transactions for payments received by the seller (txlistinternal)
+        1. Checks RPC eth_getTransactionByHash + eth_getTransactionReceipt for WETH / ERC-20 transfers
+        2. Checks Blockscout eth_getTransactionByHash & txlistinternal
         3. Checks WETH / ERC-20 token transfers
         """
         if not tx_hash:
@@ -507,10 +722,59 @@ class MultiChainProvider(NFTDataProvider):
 
         session = await self._get_session()
         norm_user = user_wallet.lower().strip()
-        api_bases = CHAIN_API_MAP.get(chain.lower(), ["https://eth.blockscout.com/api"])
 
+        # 1. Primary: Direct RPC inspection (Works for all chains & Seaport / WETH marketplace payments)
+        rpcs = RPC_MAP.get(chain.lower(), ["https://eth.llamarpc.com"])
+        for rpc in rpcs:
+            try:
+                p_tx = {"jsonrpc": "2.0", "id": 1, "method": "eth_getTransactionByHash", "params": [tx_hash]}
+                p_rcpt = {"jsonrpc": "2.0", "id": 2, "method": "eth_getTransactionReceipt", "params": [tx_hash]}
+
+                async with session.post(rpc, json=p_tx, timeout=aiohttp.ClientTimeout(total=4)) as r1, \
+                           session.post(rpc, json=p_rcpt, timeout=aiohttp.ClientTimeout(total=4)) as r2:
+                    if r1.status == 200 and r2.status == 200:
+                        txd = (await r1.json()).get("result", {})
+                        rcptd = (await r2.json()).get("result", {})
+                        if txd:
+                            raw_val = txd.get("value", "0x0")
+                            eth_val = int(raw_val, 16) / 1e18 if raw_val.startswith("0x") else int(raw_val or "0") / 1e18
+
+                            # Inspect ERC-20 Transfer logs in receipt
+                            weth_paid = 0.0
+                            weth_received = 0.0
+                            logs = rcptd.get("logs", []) if rcptd else []
+                            for l in logs:
+                                top = l.get("topics", [])
+                                if len(top) == 3 and top[0] == "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef":
+                                    src = "0x" + top[1][-40:].lower()
+                                    dst = "0x" + top[2][-40:].lower()
+                                    amt = int(l.get("data", "0x0"), 16) / 1e18
+                                    if src == norm_user:
+                                        weth_paid += amt
+                                    if dst == norm_user:
+                                        weth_received += amt
+
+                            if act_type in (ActivityType.BUY, ActivityType.MINT):
+                                if eth_val > 0:
+                                    return eth_val
+                                if weth_paid > 0:
+                                    return weth_paid
+                            elif act_type == ActivityType.SELL:
+                                if weth_received > 0:
+                                    return weth_received
+                                if eth_val > 0:
+                                    return eth_val
+                            else:
+                                if eth_val > 0:
+                                    return eth_val
+                                if max(weth_paid, weth_received) > 0:
+                                    return max(weth_paid, weth_received)
+            except Exception as e:
+                logger.debug("RPC tx lookup error: %s", e)
+
+        # 2. Secondary: Blockscout APIs
+        api_bases = CHAIN_API_MAP.get(chain.lower(), ["https://eth.blockscout.com/api"])
         for api_base in api_bases:
-            # 1. Main transaction value
             url_tx = f"{api_base}?module=proxy&action=eth_getTransactionByHash&txhash={tx_hash}"
             try:
                 async with session.get(url_tx, timeout=aiohttp.ClientTimeout(total=4)) as resp:
@@ -525,7 +789,7 @@ class MultiChainProvider(NFTDataProvider):
             except Exception as e:
                 logger.debug("Error in eth_getTransactionByHash: %s", e)
 
-            # 2. Check internal transactions (e.g. Seaport marketplace payouts)
+            # Check internal transactions (e.g. Seaport marketplace payouts)
             url_internal = f"{api_base}?module=account&action=txlistinternal&txhash={tx_hash}"
             try:
                 async with session.get(url_internal, timeout=aiohttp.ClientTimeout(total=4)) as resp:
@@ -544,7 +808,7 @@ class MultiChainProvider(NFTDataProvider):
             except Exception as e:
                 logger.debug("Error in txlistinternal: %s", e)
 
-            # 3. Check WETH / ERC-20 transfers for that wallet in the tx
+            # Check WETH / ERC-20 transfers for that wallet in the tx
             url_tokens = f"{api_base}?module=account&action=tokentx&address={norm_user}&page=1&offset=20&sort=desc"
             try:
                 async with session.get(url_tokens, timeout=aiohttp.ClientTimeout(total=4)) as resp:
@@ -561,4 +825,5 @@ class MultiChainProvider(NFTDataProvider):
                 logger.debug("Error in tokentx: %s", e)
 
         return 0.0
+
 

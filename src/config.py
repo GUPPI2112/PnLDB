@@ -36,8 +36,8 @@ CHAIN_CONFIGS: Dict[str, ChainConfig] = {
     "ordinals": ChainConfig(name="bitcoin", reservoir_host="api.reservoir.tools", currency_symbol="BTC", color_hex="#F7931A", display_name="Bitcoin"),
 
     # Robinhood
-    "robinhood": ChainConfig(name="arbitrum", reservoir_host="api-arbitrum.reservoir.tools", currency_symbol="ETH", color_hex="#00C805", display_name="Robinhood"),
-    "rh": ChainConfig(name="arbitrum", reservoir_host="api-arbitrum.reservoir.tools", currency_symbol="ETH", color_hex="#00C805", display_name="Robinhood"),
+    "robinhood": ChainConfig(name="robinhood", reservoir_host="api-arbitrum.reservoir.tools", currency_symbol="ETH", color_hex="#00C805", display_name="Robinhood Chain"),
+    "rh": ChainConfig(name="robinhood", reservoir_host="api-arbitrum.reservoir.tools", currency_symbol="ETH", color_hex="#00C805", display_name="Robinhood Chain"),
 
     # Polygon
     "polygon": ChainConfig(name="polygon", reservoir_host="api-polygon.reservoir.tools", currency_symbol="POL", color_hex="#8247E5", display_name="Polygon"),
