@@ -300,7 +300,7 @@ class MultiChainProvider(NFTDataProvider):
     async def _fetch_opensea_collection_by_slug(self, slug: str) -> Optional[dict]:
         """
         Scrapes an OpenSea collection page by slug (e.g. 'the-oil-rigs', 'pudgypenguins') to extract:
-        name, official high-res banner image, floor price, active chain, and primary smart contract address.
+        name, official real profile image (PFP), floor price, active chain, and primary smart contract address.
         """
         url = f"https://opensea.io/collection/{slug}"
         session = await self._get_session()
@@ -324,30 +324,34 @@ class MultiChainProvider(NFTDataProvider):
                     clean_name = re.sub(r'(\s+[\d\.]+\s+[A-Za-z]+)?\s*-\s*Collection\s*\|\s*OpenSea.*', '', title, flags=re.I).strip()
                     clean_name = re.sub(r'\s*\|\s*OpenSea.*', '', clean_name, flags=re.I).strip()
 
-                    # 2. Extract Official OpenSea Collection Banner Artwork (Prioritizes banner/hero over small profile/logo)
+                    # 2. Extract Official Real Profile Image (PFP) of the NFT Collection (Scoped strictly to this collection)
                     image_url = None
 
-                    # A. Banner / Hero Desktop matches
-                    banner_matches = re.findall(
-                        r'https://[^\s\"\'<>]*(?:banner|image_type_hero_desktop|image_type_hero|image_type_banner|image_type_header)[^\s\"\'<>]*',
-                        html,
+                    # A. Primary: Look for logo / avatar / PFP image scoped to this exact collection slug
+                    pfp_pattern = re.compile(
+                        rf'https://[^\s\"\'<>]*seadn\.io/collection/{re.escape(slug)}/(?:image_type_logo|image_type_avatar|image)[^\s\"\'<>]*',
                         re.I,
                     )
-                    clean_banners = [
-                        b.replace("&amp;", "&").rstrip('\\\"\'')
-                        for b in banner_matches
-                        if not b.lower().endswith(".svg") and "currency_logos" not in b and "shell-ape" not in b
+                    matches = [
+                        m.replace("&amp;", "&").rstrip('\\\"\'')
+                        for m in pfp_pattern.findall(html)
+                        if not m.lower().endswith(".svg") and "currency_logos" not in m
                     ]
-                    if clean_banners:
-                        image_url = clean_banners[0]
+                    if matches:
+                        image_url = matches[0]
 
-                    # B. OpenGraph dynamic collection banner
+                    # B. Secondary: Any scoped seadn image for this collection that is not a banner/cover
                     if not image_url:
-                        og_img = re.search(r'<meta\s+(?:property|name)=[\"\']og:image[\"\']\s+content=[\"\']([^\"\']+)[\"\']', html, re.I)
-                        if og_img and ("opengraph-image" in og_img.group(1) or "seadn.io" in og_img.group(1)):
-                            image_url = og_img.group(1).replace("&amp;", "&").rstrip('\\\"\'')
+                        all_scoped = re.findall(rf'https://[^\s\"\'<>]*seadn\.io/collection/{re.escape(slug)}/[^\s\"\'<>]*', html, re.I)
+                        scoped_clean = [
+                            m.replace("&amp;", "&").rstrip('\\\"\'')
+                            for m in all_scoped
+                            if not any(k in m.lower() for k in ["banner", "hero", "header", ".svg", "cover", "currency_logos"])
+                        ]
+                        if scoped_clean:
+                            image_url = scoped_clean[0]
 
-                    # C. Schema.org JSON metadata
+                    # C. Tertiary: Schema.org JSON metadata
                     schema_m = re.search(r'<script\s+type=[\"\']application/ld\+json[\"\'][^>]*>(.*?)</script>', html, re.DOTALL)
                     if schema_m:
                         try:
@@ -355,20 +359,23 @@ class MultiChainProvider(NFTDataProvider):
                             s_data = json.loads(schema_m.group(1))
                             if s_data.get("name") and not s_data["name"].lower().startswith("opensea"):
                                 clean_name = s_data["name"]
-                            if not image_url:
-                                if s_data.get("banner"):
-                                    image_url = s_data["banner"]
-                                elif s_data.get("image"):
-                                    image_url = s_data["image"]
+                            if not image_url and s_data.get("image"):
+                                img_cand = str(s_data["image"])
+                                if not any(k in img_cand.lower() for k in ["banner", "hero", "header", ".svg"]):
+                                    image_url = img_cand
                         except Exception:
                             pass
 
-                    # D. Fallback only if no banner is present
+                    # D. Quaternary: Generic logo/avatar tag excluding unrelated collections (shell-ape, etc.) and SVGs
                     if not image_url:
-                        imgs = re.findall(r'<img[^>]+src=[\"\']([^\"\']*(?:image_type_logo|image_type_avatar|h=250|/image/)[^\"\']*)[\"\']', html)
-                        clean_imgs = [i.replace("&amp;", "&").split("?")[0] for i in imgs if not i.endswith(".svg") and "currency_logos" not in i]
-                        if clean_imgs:
-                            image_url = clean_imgs[0]
+                        generic = re.findall(r'https://[^\s\"\'<>]*(?:image_type_logo|image_type_avatar)[^\s\"\'<>]*', html, re.I)
+                        clean_generic = [
+                            g.replace("&amp;", "&").rstrip('\\\"\'')
+                            for g in generic
+                            if not g.lower().endswith(".svg") and "currency_logos" not in g and "shell-ape" not in g
+                        ]
+                        if clean_generic:
+                            image_url = clean_generic[0]
 
                     # 3. Chain detection
                     chain = "ethereum"
@@ -406,7 +413,7 @@ class MultiChainProvider(NFTDataProvider):
         self, contract: str, chain: str
     ) -> Tuple[Optional[str], Optional[str], float]:
         """
-        Fetches official collection name, banner image, and floor price from OpenSea.
+        Fetches official collection name, real profile image (PFP), and floor price from OpenSea.
         """
         chain_slug = OPENSEA_CHAIN_MAP.get(chain.lower(), "ethereum")
         session = await self._get_session()
@@ -445,20 +452,21 @@ class MultiChainProvider(NFTDataProvider):
                             if clean and not clean.lower().startswith('opensea') and not clean.startswith('0x'):
                                 name = clean
 
-                        # 2. Extract Banner Image (prioritizes banner / hero)
+                        # 2. Extract Real Profile Image (PFP)
                         image_url = None
-                        banner_matches = re.findall(
-                            r'https://[^\s\"\'<>]*(?:banner|image_type_hero_desktop|image_type_hero|image_type_banner|image_type_header)[^\s\"\'<>]*',
+                        pfp_matches = re.findall(
+                            r'https://[^\s\"\'<>]*(?:image_type_logo|image_type_avatar|image_type_preview_media|/image/)[^\s\"\'<>]*',
                             html,
                             re.I,
                         )
-                        clean_banners = [
+                        clean_pfps = [
                             b.replace("&amp;", "&").rstrip('\\\"\'')
-                            for b in banner_matches
+                            for b in pfp_matches
                             if not b.lower().endswith(".svg") and "currency_logos" not in b and "shell-ape" not in b
+                            and not any(k in b.lower() for k in ["banner", "hero", "header"])
                         ]
-                        if clean_banners:
-                            image_url = clean_banners[0]
+                        if clean_pfps:
+                            image_url = clean_pfps[0]
 
                         # Schema.org JSON
                         schema_m = re.search(r'<script\s+type=[\"\']application/ld\+json[\"\'][^>]*>(.*?)</script>', html, re.DOTALL)
@@ -468,22 +476,21 @@ class MultiChainProvider(NFTDataProvider):
                                 s_data = json.loads(schema_m.group(1))
                                 if s_data.get("name") and not s_data["name"].lower().startswith("opensea"):
                                     name = s_data["name"]
-                                if not image_url:
-                                    if s_data.get("banner"):
-                                        image_url = s_data["banner"]
-                                    elif s_data.get("image"):
-                                        image_url = s_data["image"]
+                                if not image_url and s_data.get("image"):
+                                    img_cand = str(s_data["image"])
+                                    if not any(k in img_cand.lower() for k in ["banner", "hero", "header", ".svg"]):
+                                        image_url = img_cand
                             except Exception:
                                 pass
 
                         if not image_url:
-                            og_img = re.search(r'<meta\s+(?:property|name)=[\"\']og:image[\"\']\s+content=[\"\']([^\"\']+)[\"\']', html, re.I)
-                            if og_img and ('opengraph-image' in og_img.group(1) or 'seadn.io' in og_img.group(1)):
-                                image_url = og_img.group(1).replace("&amp;", "&").rstrip('\\\"\'')
-
-                        if not image_url:
                             imgs = re.findall(r'<img[^>]+src=[\"\']([^\"\']*(?:image_type_logo|image_type_avatar|h=250|/image/)[^\"\']*)[\"\']', html)
-                            clean_imgs = [i.replace("&amp;", "&").split("?")[0] for i in imgs if not i.endswith(".svg") and "currency_logos" not in i]
+                            clean_imgs = [
+                                i.replace("&amp;", "&").split("?")[0]
+                                for i in imgs
+                                if not i.endswith(".svg") and "currency_logos" not in i and "shell-ape" not in i
+                                and not any(k in i.lower() for k in ["banner", "hero", "header"])
+                            ]
                             if clean_imgs:
                                 image_url = clean_imgs[0]
 
