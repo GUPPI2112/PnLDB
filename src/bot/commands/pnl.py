@@ -66,16 +66,43 @@ async def execute_pnl_check(
     # 2. Fetch data via MultiChainProvider
     provider = MultiChainProvider()
     try:
-        collection_meta = await provider.get_collection_metadata(contract, chain_cfg.name)
-        activities = await provider.get_user_activity(wallet, contract, chain_cfg.name)
+        resolved_chain_cfg = chain_cfg
+        collection_meta = await provider.get_collection_metadata(contract, resolved_chain_cfg.name)
+        activities = await provider.get_user_activity(wallet, contract, resolved_chain_cfg.name)
+
+        # Cross-Chain Auto-Detection: If 0 activities on requested chain, scan other EVM chains concurrently
+        if not activities and contract.startswith("0x") and len(contract) == 42:
+            candidate_chains = ["base", "arbitrum", "ethereum", "polygon", "optimism", "blast", "zora", "apechain"]
+            targets = [c for c in candidate_chains if c != chain_cfg.name and config.get_chain_config(c)]
+
+            async def probe_chain(c_name: str):
+                try:
+                    c_acts = await provider.get_user_activity(wallet, contract, c_name)
+                    c_meta = await provider.get_collection_metadata(contract, c_name)
+                    return c_name, c_acts, c_meta
+                except Exception:
+                    return c_name, [], None
+
+            probe_results = await asyncio.gather(*[probe_chain(t) for t in targets])
+            for c_name, c_acts, c_meta in probe_results:
+                if c_acts:
+                    activities = c_acts
+                    resolved_chain_cfg = config.get_chain_config(c_name) or resolved_chain_cfg
+                    if c_meta:
+                        collection_meta = c_meta
+                    logger.info("Auto-detected active chain %s with %d activities for contract %s", c_name, len(c_acts), contract)
+                    break
+                elif collection_meta.name.startswith("NFT (0x") and c_meta and not c_meta.name.startswith("NFT (0x"):
+                    resolved_chain_cfg = config.get_chain_config(c_name) or resolved_chain_cfg
+                    collection_meta = c_meta
 
         # 3. Calculate PnL matching reference template
         pnl_result = calculate_nft_pnl(
             events=activities,
             wallet_address=wallet,
             contract_address=contract,
-            chain=chain_cfg.name,
-            currency_symbol=chain_cfg.currency_symbol,
+            chain=resolved_chain_cfg.name,
+            currency_symbol=resolved_chain_cfg.currency_symbol,
             floor_price_native=collection_meta.floor_price_native,
             native_price_usd=collection_meta.native_price_usd,
             user_display_name=user_name,

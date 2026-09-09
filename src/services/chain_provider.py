@@ -99,11 +99,35 @@ OPENSEA_CHAIN_MAP: Dict[str, str] = {
 }
 
 
+RPC_MAP: Dict[str, List[str]] = {
+    "ethereum": ["https://eth.llamarpc.com", "https://rpc.ankr.com/eth"],
+    "base": ["https://mainnet.base.org", "https://rpc.ankr.com/base"],
+    "arbitrum": ["https://arb1.arbitrum.io/rpc", "https://rpc.ankr.com/arbitrum"],
+    "polygon": ["https://polygon-rpc.com", "https://rpc.ankr.com/polygon"],
+    "optimism": ["https://mainnet.optimism.io", "https://rpc.ankr.com/optimism"],
+    "blast": ["https://rpc.blast.io"],
+    "zora": ["https://rpc.zora.energy"],
+    "apechain": ["https://rpc.apechain.com"],
+}
+
+
+def decode_abi_string(hex_str: str) -> str:
+    if not hex_str or hex_str == "0x" or len(hex_str) < 130:
+        return ""
+    try:
+        raw = bytes.fromhex(hex_str[2:])
+        length = int.from_bytes(raw[32:64], "big")
+        return raw[64 : 64 + length].decode("utf-8", errors="ignore").strip()
+    except Exception:
+        return ""
+
+
 class MultiChainProvider(NFTDataProvider):
     """
     Robust Multi-chain NFT data provider supporting ERC-721 and ERC-1155,
     exact mint & sale prices from tx values, internal transactions, WETH transfers,
-    OpenSea collection metadata & avatars, and real-time floor prices across all chains.
+    OpenSea collection metadata & avatars, onchain RPC contract inspection,
+    and real-time floor prices across all chains.
     """
 
     def __init__(self):
@@ -158,50 +182,58 @@ class MultiChainProvider(NFTDataProvider):
         Fetches official collection name, avatar image, and floor price from OpenSea.
         """
         chain_slug = OPENSEA_CHAIN_MAP.get(chain.lower(), "ethereum")
-        url = f"https://opensea.io/assets/{chain_slug}/{contract}"
         session = await self._get_session()
-        try:
-            async with session.get(url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=6)) as resp:
-                if resp.status == 200:
-                    html = await resp.text()
+        
+        urls = [
+            f"https://opensea.io/assets/{chain_slug}/{contract}",
+            f"https://opensea.io/item/{chain_slug}/{contract}/1",
+        ]
 
-                    # 1. Extract collection title
-                    title_match = re.search(r'<meta\s+property=[\"\']og:title[\"\']\s+content=[\"\']([^\"\']+)[\"\']', html, re.I)
-                    name = None
-                    floor_price = 0.0
+        for url in urls:
+            try:
+                async with session.get(url, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        html = await resp.text()
 
-                    if title_match:
-                        raw_title = title_match.group(1)
+                        # 1. Extract collection title
+                        title_match = re.search(r'<meta\s+property=[\"\']og:title[\"\']\s+content=[\"\']([^\"\']+)[\"\']', html, re.I)
+                        name = None
+                        floor_price = 0.0
 
-                        # Extract floor price if present: e.g. '0.0005 ETH'
-                        floor_match = re.search(r'([\d\.]+)\s+(?:ETH|MATIC|POL|WETH|SOL)', raw_title, re.I)
-                        if floor_match:
-                            try:
-                                floor_price = float(floor_match.group(1))
-                            except Exception:
-                                pass
+                        if title_match:
+                            raw_title = title_match.group(1)
 
-                        clean = re.sub(r'(\s+[\d\.]+\s+[A-Za-z]+)?\s*-\s*Collection\s*\|\s*OpenSea.*', '', raw_title, flags=re.I).strip()
-                        clean = re.sub(r'\s*\|\s*OpenSea.*', '', clean, flags=re.I).strip()
-                        if ' - ' in clean and '#' in clean.split(' - ')[0]:
-                            clean = clean.split(' - ', 1)[1].strip()
-                        if clean and clean.lower() not in ['opensea', 'exchange everything', 'contract', 'collection']:
-                            name = clean
+                            # Extract floor price if present: e.g. '0.0005 ETH'
+                            floor_match = re.search(r'([\d\.]+)\s+(?:ETH|MATIC|POL|WETH|SOL)', raw_title, re.I)
+                            if floor_match:
+                                try:
+                                    floor_price = float(floor_match.group(1))
+                                except Exception:
+                                    pass
 
-                    # 2. Extract collection avatar / logo image
-                    image_url = None
-                    imgs = re.findall(r'<img[^>]+src=[\"\']([^\"\']*(?:image_type_logo|image_type_avatar|h=250|/image/)[^\"\']*)[\"\']', html)
-                    if imgs:
-                        image_url = imgs[0].replace('&amp;', '&').split('?')[0]
+                            clean = re.sub(r'(\s+[\d\.]+\s+[A-Za-z]+)?\s*-\s*Collection\s*\|\s*OpenSea.*', '', raw_title, flags=re.I).strip()
+                            clean = re.sub(r'\s*\|\s*OpenSea.*', '', clean, flags=re.I).strip()
+                            if ' - ' in clean and '#' in clean.split(' - ')[0]:
+                                clean = clean.split(' - ', 1)[1].strip()
+                            if clean and not clean.lower().startswith('opensea') and not clean.startswith('0x'):
+                                name = clean
 
-                    if not image_url:
-                        og_img = re.search(r'<meta\s+property=[\"\']og:image[\"\']\s+content=[\"\']([^\"\']+)[\"\']', html, re.I)
-                        if og_img and ('opengraph-image' in og_img.group(1) or 'seadn.io' in og_img.group(1)):
-                            image_url = og_img.group(1)
+                        # 2. Extract collection avatar / logo image
+                        image_url = None
+                        imgs = re.findall(r'<img[^>]+src=[\"\']([^\"\']*(?:image_type_logo|image_type_avatar|h=250|/image/)[^\"\']*)[\"\']', html)
+                        if imgs:
+                            image_url = imgs[0].replace('&amp;', '&').split('?')[0]
 
-                    return name, image_url, floor_price
-        except Exception as e:
-            logger.debug("OpenSea metadata lookup error for %s: %s", contract, e)
+                        if not image_url:
+                            og_img = re.search(r'<meta\s+property=[\"\']og:image[\"\']\s+content=[\"\']([^\"\']+)[\"\']', html, re.I)
+                            if og_img and ('opengraph-image' in og_img.group(1) or 'seadn.io' in og_img.group(1)):
+                                image_url = og_img.group(1)
+
+                        if name or image_url:
+                            return name, image_url, floor_price
+            except Exception as e:
+                logger.debug("OpenSea metadata lookup error for %s on %s: %s", contract, url, e)
+
         return None, None, 0.0
 
     async def get_collection_metadata(
@@ -268,7 +300,63 @@ class MultiChainProvider(NFTDataProvider):
                 except Exception as e:
                     logger.debug("Blockscout instance lookup error: %s", e)
 
-        # 4. If user entered a collection name directly, preserve it
+            # 4. Fallback / Quaternary: Direct Onchain RPC Call (ERC-721 name() & tokenURI())
+            if display_name.startswith("NFT (0x") or not image_url:
+                rpcs = RPC_MAP.get(chain.lower(), ["https://eth.llamarpc.com"])
+                for rpc in rpcs:
+                    # Query onchain name()
+                    if display_name.startswith("NFT (0x"):
+                        try:
+                            payload = {
+                                "jsonrpc": "2.0",
+                                "id": 1,
+                                "method": "eth_call",
+                                "params": [{"to": norm_contract, "data": "0x06fdde03"}, "latest"],
+                            }
+                            async with session.post(rpc, json=payload, timeout=aiohttp.ClientTimeout(total=3)) as resp:
+                                if resp.status == 200:
+                                    data = await resp.json()
+                                    onchain_name = decode_abi_string(data.get("result", ""))
+                                    if onchain_name:
+                                        display_name = onchain_name
+                        except Exception:
+                            pass
+
+                    # Query onchain tokenURI()
+                    if not image_url:
+                        for tid in [1, 0, 2]:
+                            try:
+                                token_hex = hex(tid)[2:].zfill(64)
+                                payload = {
+                                    "jsonrpc": "2.0",
+                                    "id": 1,
+                                    "method": "eth_call",
+                                    "params": [{"to": norm_contract, "data": "0xc87b56dd" + token_hex}, "latest"],
+                                }
+                                async with session.post(rpc, json=payload, timeout=aiohttp.ClientTimeout(total=3)) as resp:
+                                    if resp.status == 200:
+                                        data = await resp.json()
+                                        uri = decode_abi_string(data.get("result", ""))
+                                        if uri:
+                                            if uri.startswith("ipfs://"):
+                                                uri = "https://ipfs.io/ipfs/" + uri[7:]
+                                            async with session.get(uri, timeout=aiohttp.ClientTimeout(total=3)) as meta_r:
+                                                if meta_r.status == 200:
+                                                    mjson = await meta_r.json()
+                                                    if display_name.startswith("NFT (0x") and mjson.get("collection_name"):
+                                                        display_name = mjson["collection_name"]
+                                                    img = mjson.get("image") or mjson.get("image_url")
+                                                    if img:
+                                                        if img.startswith("ipfs://"):
+                                                            img = "https://ipfs.io/ipfs/" + img[7:]
+                                                        image_url = img
+                                                        break
+                            except Exception:
+                                pass
+                        if image_url:
+                            break
+
+        # 5. If user entered a collection name directly, preserve it
         if not norm_contract.startswith("0x"):
             display_name = norm_contract
 
