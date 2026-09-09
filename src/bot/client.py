@@ -73,33 +73,41 @@ class NFTPnLBot(commands.Bot):
                     channel = None
 
             if isinstance(channel, (discord.TextChannel, discord.Thread)):
-                # Check recent messages to avoid duplicate panel posting
-                async for msg in channel.history(limit=10):
-                    if msg.author == self.user and msg.components:
-                        logger.info("Check PnL panel already active in channel %s", channel_id)
-                        return
-
                 embed = discord.Embed(
                     title="NFT PnL Tracker",
                     description=(
-                        "Calculate your NFT collection PnL, ROI %, and trade statistics across multiple chains.\n\n"
-                        "Click **Check PnL** below to open the form and generate your custom card."
+                        "Calculate your NFT collection PnL, ROI %, and trade statistics across all blockchains.\n\n"
+                        "Click **Check PnL** below and enter your wallet and contract address — the network will be **auto-detected automatically**."
                     ),
                     color=discord.Color.from_rgb(47, 230, 149),
                 )
                 embed.add_field(
-                    name="Supported Chains",
-                    value="ETH, Base, SOL, BTC (Ordinals), Robinhood, Polygon, Arbitrum, Optimism, Blast, Zora, ApeChain",
+                    name="Supported Networks",
+                    value="Ethereum, Base, Arbitrum, Polygon, Optimism, Blast, Zora, ApeChain, Solana, Bitcoin",
                     inline=False,
                 )
-                embed.set_footer(text="Multi-Chain NFT PnL Tracker")
+                embed.set_footer(text="Obsidian Multi-Chain NFT Analytics")
 
                 view = PnLLauncherView()
-                await channel.send(embed=embed, view=view)
-                logger.info("Successfully posted Check PnL panel to channel %s", channel_id)
+
+                # Update existing message if present, or post a new clean panel
+                updated_existing = False
+                async for msg in channel.history(limit=10):
+                    if msg.author == self.user and msg.components:
+                        try:
+                            await msg.edit(embed=embed, view=view)
+                            logger.info("Updated existing Check PnL panel in channel %s", channel_id)
+                            updated_existing = True
+                            break
+                        except Exception:
+                            pass
+
+                if not updated_existing:
+                    await channel.send(embed=embed, view=view)
+                    logger.info("Successfully posted Check PnL panel to channel %s", channel_id)
         except Exception as e:
             logger.warning(
-                "Could not auto-post panel to channel %s: %s (You can also run /setup manually in the channel)",
+                "Could not post/update panel in channel %s: %s",
                 channel_id,
                 e,
             )

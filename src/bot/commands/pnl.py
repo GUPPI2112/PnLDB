@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 import discord
 from discord import app_commands
 from src.config import config
@@ -44,14 +45,18 @@ async def execute_pnl_check(
         )
         return
 
-    chain_cfg = config.get_chain_config(chain_key)
+    if chain_str in ("auto", "", None) or not config.get_chain_config(chain_key):
+        if wallet.startswith("0x"):
+            chain_cfg = config.get_chain_config("ethereum")
+        elif wallet.startswith(("bc1", "1", "3")) and len(wallet) >= 26:
+            chain_cfg = config.get_chain_config("bitcoin")
+        else:
+            chain_cfg = config.get_chain_config("solana")
+    else:
+        chain_cfg = config.get_chain_config(chain_key)
+
     if not chain_cfg:
-        supported = config.supported_chains_display()
-        await interaction.followup.send(
-            f"Unsupported chain: `{chain_str}`.\nSupported chains: {supported}",
-            ephemeral=True,
-        )
-        return
+        chain_cfg = config.get_chain_config("ethereum")
 
     # User profile data from Discord
     user_name = (
@@ -140,14 +145,15 @@ async def execute_pnl_check(
         await provider.close()
 
 
-@app_commands.command(name="pnl", description="Generate an NFT PnL card for a wallet and collection")
+@app_commands.command(name="pnl", description="Generate an NFT PnL card (Auto-detects blockchain)")
 @app_commands.describe(
     wallet="Your wallet address (0x... or SOL/BTC)",
     contract="The NFT contract address or collection ID",
-    chain="The blockchain network (eth, base, sol, btc, robinhood, polygon, arbitrum, optimism)",
+    chain="Optional blockchain network (Auto-detected if omitted)",
 )
 @app_commands.choices(
     chain=[
+        app_commands.Choice(name="Auto-Detect", value="auto"),
         app_commands.Choice(name="Ethereum", value="ethereum"),
         app_commands.Choice(name="Base", value="base"),
         app_commands.Choice(name="Solana", value="solana"),
@@ -165,12 +171,13 @@ async def pnl_command(
     interaction: discord.Interaction,
     wallet: str,
     contract: str,
-    chain: app_commands.Choice[str],
+    chain: Optional[app_commands.Choice[str]] = None,
 ):
     await interaction.response.defer(thinking=True, ephemeral=True)
+    chain_val = chain.value if chain else "auto"
     await execute_pnl_check(
         interaction=interaction,
         wallet_str=wallet,
         contract_str=contract,
-        chain_str=chain.value,
+        chain_str=chain_val,
     )

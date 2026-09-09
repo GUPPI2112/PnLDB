@@ -4,13 +4,11 @@ from discord import ui
 
 class PnLModal(ui.Modal):
     """
-    Clean 2-field form modal for Wallet and Contract address.
-    Displays the selected blockchain in the title.
+    Clean 2-field form modal for Wallet and Contract address with multi-chain auto-detection.
     """
 
-    def __init__(self, selected_chain: str = "ethereum"):
-        display_chain = selected_chain.capitalize()
-        super().__init__(title=f"Check NFT PnL ({display_chain})")
+    def __init__(self, selected_chain: str = "auto"):
+        super().__init__(title="Check NFT PnL")
         self.selected_chain = selected_chain
 
         self.wallet_input = ui.TextInput(
